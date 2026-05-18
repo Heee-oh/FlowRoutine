@@ -1,0 +1,58 @@
+# Local caches
+.gocache/
+.gomodcache/
+.cache/
+
+# Local secrets / environment overrides
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+secrets.*
+
+# Local planning / policy drafts not published with the project
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+SECURITY.md
+PROGRESS.md
+goal.md
+
+# Go
+/flowroutine
+/FlowRoutine
+*.test
+*.prof
+*.pprof
+coverage.out
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/frontend/
+frontend/wailsjs/
+frontend/package.json.md5
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Generated Wails embed assets. Regenerate with:
+# npm --prefix frontend run build:wails
+cmd/flowroutine/frontend/dist/
+
+# Wails / platform build output
+build/bin/
+build/darwin/
+build/windows/
+build/linux/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

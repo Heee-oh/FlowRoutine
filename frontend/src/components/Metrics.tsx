@@ -1,0 +1,260 @@
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { Activity, Gauge, ListChecks, Network, Timer } from "lucide-react";
+import { useMetricsStore } from "../store";
+import type { MetricsBatch, StatusCodeCount } from "../types";
+import { formatBytes, formatNumber } from "../format";
+
+export const MetricGrid = memo(function MetricGrid() {
+  const latest = useMetricsStore((state) => state.latest);
+  const [statusDetailsOpen, setStatusDetailsOpen] = useState(false);
+
+  return (
+    <section className="metrics-panel" aria-label="Run metrics">
+      <div className="metrics-primary">
+        <Metric icon={<Gauge size={17} />} label="RPS" value={formatNumber(latest?.rps ?? 0, 1)} />
+        <Metric icon={<Activity size={17} />} label="Total" value={formatNumber(latest?.total ?? 0)} />
+        <Metric icon={<Network size={17} />} label="Success" value={formatNumber(latest?.success ?? 0)} />
+        <Metric icon={<Network size={17} />} label="Failed" value={formatNumber(latest?.failed ?? 0)} />
+        <Metric icon={<Timer size={17} />} label="Avg latency" value={`${formatNumber(latest?.avgLatencyMs ?? 0, 2)} ms`} />
+        <Metric icon={<Timer size={17} />} label="P99 latency" value={`${formatNumber(latest?.p99LatencyMs ?? 0, 2)} ms`} />
+      </div>
+      <div className="metrics-secondary">
+        <MetricDetail label="P95" value={`${formatNumber(latest?.p95LatencyMs ?? 0, 2)} ms`} />
+        <MetricDetail label="P99.9" value={`${formatNumber(latest?.p999LatencyMs ?? 0, 2)} ms`} />
+        <MetricDetail label="Timeout" value={formatNumber(latest?.timeout ?? 0)} />
+        <MetricDetail label="DNS" value={formatNumber(latest?.dns ?? 0)} />
+        <MetricDetail label="TLS" value={formatNumber(latest?.tls ?? 0)} />
+        <MetricDetail label="Refused" value={formatNumber(latest?.connRefused ?? 0)} />
+        <MetricDetail label="Other" value={formatNumber(latest?.otherErrors ?? 0)} />
+        <MetricDetail label="Assertions" value={formatNumber(latest?.assertionsFailed ?? 0)} />
+        <MetricDetail label="Read" value={formatBytes(latest?.bytesRead ?? 0)} />
+      </div>
+      <div className="metrics-footer">
+        <button
+          type="button"
+          className="secondary icon-button metric-details-button"
+          aria-label="Status details"
+          title="Status details"
+          onClick={() => setStatusDetailsOpen(true)}
+        >
+          <ListChecks size={15} />
+        </button>
+      </div>
+      {statusDetailsOpen ? (
+        <StatusDetailsDialog batch={latest} onClose={() => setStatusDetailsOpen(false)} />
+      ) : null}
+    </section>
+  );
+});
+
+export const MetricsChart = memo(function MetricsChart() {
+  const points = useMetricsStore((state) => state.points);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const resizeObserver = new ResizeObserver(() => drawChart(canvas, points));
+    resizeObserver.observe(canvas);
+    drawChart(canvas, points);
+    return () => resizeObserver.disconnect();
+  }, [points]);
+
+  return (
+    <section className="chart-panel">
+      <div className="chart-head">
+        <div>
+          <div className="eyebrow">Realtime</div>
+          <h2>RPS and latency</h2>
+        </div>
+        <div className="legend">
+          <span className="legend-rps" />RPS log
+          <span className="legend-latency" />P99 ms
+        </div>
+      </div>
+      <canvas ref={canvasRef} className="metrics-canvas" />
+    </section>
+  );
+});
+
+const Metric = memo(function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+  return (
+    <article className="metric">
+      <span>{icon}{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
+});
+
+const MetricDetail = memo(function MetricDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="metric-detail">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+});
+
+const StatusDetailsDialog = memo(function StatusDetailsDialog({
+  batch,
+  onClose,
+}: {
+  batch: MetricsBatch | null;
+  onClose: () => void;
+}) {
+  const statusCodes = batch?.statusCodes ?? [];
+  const total = batch?.total ?? 0;
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="modal status-details-modal" role="dialog" aria-modal="true" aria-labelledby="status-details-title">
+        <div>
+          <div className="eyebrow">Results</div>
+          <h2 id="status-details-title">Status details</h2>
+        </div>
+        <div className="status-summary">
+          <MetricDetail label="Total" value={formatNumber(total)} />
+          <MetricDetail label="Success" value={formatNumber(batch?.success ?? 0)} />
+          <MetricDetail label="Failed" value={formatNumber(batch?.failed ?? 0)} />
+        </div>
+        {statusCodes.length === 0 ? (
+          <div className="inspector-note">No HTTP responses yet</div>
+        ) : (
+          <div className="status-code-list">
+            <div className="status-code-row status-code-header">
+              <span>Status code</span>
+              <span>Count</span>
+              <span>Rate</span>
+            </div>
+            {statusCodes.map((item) => (
+              <StatusCodeRow key={item.code} item={item} total={total} />
+            ))}
+          </div>
+        )}
+        <button type="button" className="secondary" onClick={onClose}>Close</button>
+      </div>
+    </div>
+  );
+});
+
+const StatusCodeRow = memo(function StatusCodeRow({ item, total }: { item: StatusCodeCount; total: number }) {
+  const ratio = total > 0 ? (item.count / total) * 100 : 0;
+  return (
+    <div className="status-code-row">
+      <span className={`status-code status-code-${Math.floor(item.code / 100)}xx`}>{item.code}</span>
+      <strong>{formatNumber(item.count)} responses</strong>
+      <small>{formatNumber(ratio, 1)}%</small>
+    </div>
+  );
+});
+
+function drawChart(canvas: HTMLCanvasElement, points: MetricsBatch[]) {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.floor(rect.width * dpr));
+  const height = Math.max(1, Math.floor(rect.height * dpr));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.save();
+  ctx.scale(dpr, dpr);
+
+  const cssWidth = width / dpr;
+  const cssHeight = height / dpr;
+  const padding = { left: 46, right: 18, top: 16, bottom: 28 };
+  const chartWidth = cssWidth - padding.left - padding.right;
+  const chartHeight = cssHeight - padding.top - padding.bottom;
+
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const y = padding.top + (chartHeight / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(cssWidth - padding.right, y);
+    ctx.stroke();
+  }
+
+  if (points.length < 2) {
+    ctx.fillStyle = "#8b98a7";
+    ctx.font = "13px system-ui";
+    ctx.fillText("Waiting for batched metrics", padding.left, padding.top + 24);
+    ctx.restore();
+    return;
+  }
+
+  const firstTs = points[0].timestampUnixMs;
+  const lastTs = points[points.length - 1].timestampUnixMs;
+  const span = Math.max(1, lastTs - firstTs);
+  const maxRps = niceMax(Math.max(1, ...points.map((point) => point.rps || 0)));
+  const maxLatency = niceMax(Math.max(1, ...points.map((point) => point.p99LatencyMs || point.avgLatencyMs || 0)));
+
+  drawSeries(ctx, points, "rps", firstTs, span, maxRps, "#39d0a3", padding, chartWidth, chartHeight, true);
+  drawSeries(ctx, points, "p99LatencyMs", firstTs, span, maxLatency, "#5aa9ff", padding, chartWidth, chartHeight, false);
+
+  ctx.fillStyle = "#8b98a7";
+  ctx.font = "12px system-ui";
+  ctx.fillText(formatNumber(maxRps), 8, padding.top + 4);
+  ctx.fillText(`${formatNumber(maxLatency, 1)}ms`, cssWidth - 58, padding.top + 4);
+  ctx.fillText("0", 28, padding.top + chartHeight + 4);
+  ctx.restore();
+}
+
+function drawSeries(
+  ctx: CanvasRenderingContext2D,
+  points: MetricsBatch[],
+  key: "rps" | "p99LatencyMs",
+  firstTs: number,
+  span: number,
+  maxValue: number,
+  color: string,
+  padding: { left: number; top: number },
+  chartWidth: number,
+  chartHeight: number,
+  logScale: boolean,
+) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    const x = padding.left + ((point.timestampUnixMs - firstTs) / span) * chartWidth;
+    const rawValue = point[key] || 0;
+    const normalized = logScale ? logNormalize(rawValue, maxValue) : Math.min(1, rawValue / maxValue);
+    const y = padding.top + chartHeight - normalized * chartHeight;
+    if (index === 0) {
+      ctx.moveTo(x, y);
+      return;
+    }
+    ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
+
+function niceMax(value: number) {
+  if (value <= 0) {
+    return 1;
+  }
+  const power = Math.pow(10, Math.floor(Math.log10(value)));
+  const normalized = value / power;
+  if (normalized <= 2) {
+    return 2 * power;
+  }
+  if (normalized <= 5) {
+    return 5 * power;
+  }
+  return 10 * power;
+}
+
+function logNormalize(value: number, maxValue: number) {
+  return Math.min(1, Math.log10(value + 1) / Math.log10(maxValue + 1));
+}
