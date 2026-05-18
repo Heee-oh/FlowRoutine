@@ -1,30 +1,30 @@
 import type { MetricsBatch, StartRequest } from "./types";
-import { StartLoad, StopLoad } from "../wailsjs/go/main/App";
-import type { bridge } from "../wailsjs/go/models";
-import { EventsOn } from "../wailsjs/runtime/runtime";
 
 const metricsEvent = "metrics:batch";
 
 export function startLoad(request: StartRequest) {
-  if (!window.go?.main?.App?.StartLoad) {
+  const startLoad = window.go?.main?.App?.StartLoad;
+  if (!startLoad) {
     return Promise.reject(new Error("Wails bridge is unavailable"));
   }
-  return StartLoad(request as unknown as bridge.StartRequest);
+  return startLoad(request);
 }
 
 export function stopLoad() {
-  if (!window.go?.main?.App?.StopLoad) {
+  const stopLoad = window.go?.main?.App?.StopLoad;
+  if (!stopLoad) {
     return Promise.reject(new Error("Wails bridge is unavailable"));
   }
-  return StopLoad();
+  return stopLoad();
 }
 
 export function onMetricsBatch(callback: (batch: MetricsBatch) => void) {
-  if (!window.runtime?.EventsOn) {
+  const eventsOn = window.runtime?.EventsOn;
+  if (!eventsOn) {
     return () => undefined;
   }
 
-  return EventsOn(metricsEvent, (...data: unknown[]) => {
+  return eventsOn(metricsEvent, (...data: unknown[]) => {
     const payload = Array.isArray(data[0]) ? data[0][0] : data[0];
     if (isMetricsBatch(payload)) {
       callback(payload);

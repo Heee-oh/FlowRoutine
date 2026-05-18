@@ -70,8 +70,8 @@ declare global {
     go?: {
       main?: {
         App?: {
-          StartLoad?: unknown;
-          StopLoad?: unknown;
+          StartLoad?: (request: StartRequest) => Promise<unknown>;
+          StopLoad?: () => Promise<void>;
         };
       };
     };
