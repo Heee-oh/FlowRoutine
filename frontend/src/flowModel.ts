@@ -1,7 +1,7 @@
 import type { Edge, Node } from "@xyflow/react";
 import { DEFAULT_METRIC_WINDOW_MS } from "./store";
 import { formatDuration } from "./format";
-import type { FlowSettings, Header, LoadConfig, ScenarioStep, StartRequest } from "./types";
+import type { Header, LoadConfig, OpenAPIEndpoint, ScenarioStep, StartRequest } from "./types";
 import type {
   FlowNodeData,
   FlowNodeKind,
@@ -56,7 +56,7 @@ export const initialFlowNodes: Node<FlowNodeData>[] = [
 export function createFlowNode(
   kind: FlowNodeKind,
   index: number,
-  settings: FlowSettings | null,
+  settings: Partial<FlowNodeData> | null,
   position?: { x: number; y: number },
   onDelete?: (id: string) => void,
 ): Node<FlowNodeData> {
@@ -68,6 +68,17 @@ export function createFlowNode(
     position: position ?? { x: 40 + (index % 4) * 220, y: 60 + Math.floor(index / 4) * 130 },
     data,
   });
+}
+
+export function openAPIEndpointToRequestSettings(endpoint: OpenAPIEndpoint, sourceURL: string): Partial<FlowNodeData> {
+  const method = endpoint.method.toUpperCase();
+  return {
+    url: openAPIEndpointURL(endpoint, sourceURL),
+    method,
+    headersText: openAPIHeadersText(method),
+    ...openAPIAuthSettings(endpoint),
+    body: endpoint.bodySample,
+  };
 }
 
 export function getHost(url: string) {
@@ -289,13 +300,13 @@ export function formatHeaderRows(rows: HeaderRow[]) {
     .join("\n");
 }
 
-function nodeTemplate(kind: FlowNodeKind, settings: FlowSettings | null): FlowNodeTemplate {
+function nodeTemplate(kind: FlowNodeKind, settings: Partial<FlowNodeData> | null): FlowNodeTemplate {
   switch (kind) {
     case "request":
       return {
         label: "Request",
         value: settings?.method ?? "GET",
-        caption: settings ? getHost(settings.url) : "127.0.0.1:8080",
+        caption: settings?.url ? getHost(settings.url) : "127.0.0.1:8080",
         tone: "source",
         url: settings?.url ?? "http://127.0.0.1:8080",
         method: settings?.method ?? "GET",
@@ -351,6 +362,72 @@ function nodeTemplate(kind: FlowNodeKind, settings: FlowSettings | null): FlowNo
         tone: "window",
         windowMs: DEFAULT_METRIC_WINDOW_MS,
       };
+  }
+}
+
+function openAPIEndpointURL(endpoint: OpenAPIEndpoint, sourceURL: string) {
+  const serverURL = endpoint.serverUrl || sourceURL;
+  const path = openAPIPathWithSamples(endpoint);
+  try {
+    const base = new URL(serverURL, sourceURL);
+    const url = new URL(path.replace(/^\/+/, ""), normalizedBaseURL(base));
+    for (const parameter of endpoint.parameters ?? []) {
+      if (parameter.in === "query" && parameter.name) {
+        url.searchParams.set(parameter.name, parameter.sample || "string");
+      }
+    }
+    return url.toString();
+  } catch {
+    const query = openAPIQueryString(endpoint);
+    return `${serverURL.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}${query}`;
+  }
+}
+
+function openAPIPathWithSamples(endpoint: OpenAPIEndpoint) {
+  const pathParameters = new Map(
+    (endpoint.parameters ?? [])
+      .filter((parameter) => parameter.in === "path")
+      .map((parameter) => [parameter.name, parameter.sample || "1"]),
+  );
+  return endpoint.path.replace(/\{([^}]+)\}/g, (_match, name: string) => encodeURIComponent(pathParameters.get(name) ?? "1"));
+}
+
+function openAPIQueryString(endpoint: OpenAPIEndpoint) {
+  const params = new URLSearchParams();
+  for (const parameter of endpoint.parameters ?? []) {
+    if (parameter.in === "query" && parameter.name) {
+      params.set(parameter.name, parameter.sample || "string");
+    }
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+function normalizedBaseURL(url: URL) {
+  if (!url.pathname.endsWith("/")) {
+    url.pathname = `${url.pathname}/`;
+  }
+  return url;
+}
+
+function openAPIHeadersText(method: string) {
+  const headers = ["Accept: application/json"];
+  if (method !== "GET" && method !== "HEAD") {
+    headers.push("Content-Type: application/json");
+  }
+  return headers.join("\n");
+}
+
+function openAPIAuthSettings(endpoint: OpenAPIEndpoint): Partial<FlowNodeData> {
+  switch (endpoint.auth.type) {
+    case "bearer":
+      return { authType: "bearer" };
+    case "apiKey":
+      return { authType: "apiKey", authApiKeyName: endpoint.auth.name || "X-Api-Key" };
+    case "cookie":
+      return { authType: "cookie", authCookieName: endpoint.auth.name || "session" };
+    default:
+      return { authType: "none" };
   }
 }
 

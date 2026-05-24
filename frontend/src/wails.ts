@@ -18,6 +18,14 @@ export function stopLoad() {
   return stopLoad();
 }
 
+export function importOpenAPI(url: string) {
+  const importOpenAPI = window.go?.main?.App?.ImportOpenAPI;
+  if (!importOpenAPI) {
+    return Promise.reject(new Error("Wails bridge is unavailable"));
+  }
+  return importOpenAPI(url);
+}
+
 export function onMetricsBatch(callback: (batch: MetricsBatch) => void) {
   const eventsOn = window.runtime?.EventsOn;
   if (!eventsOn) {

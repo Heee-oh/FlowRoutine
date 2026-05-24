@@ -406,6 +406,11 @@ button:disabled {
   font-size: 12px;
 }
 
+.import-button {
+  border-color: rgba(90, 169, 255, 0.42);
+  color: #cfe5ff;
+}
+
 .flow-shell {
   overflow: hidden;
   border: 1px solid var(--line);
@@ -773,6 +778,165 @@ button:disabled {
 
 .help-modal {
   width: min(540px, calc(100vw - 48px));
+}
+
+.openapi-import-modal {
+  width: min(720px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+}
+
+.field-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.field-stack span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.dialog-error {
+  border: 1px solid rgba(255, 107, 107, 0.38);
+  border-radius: 8px;
+  background: rgba(255, 107, 107, 0.08);
+  color: #ffc7c7;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.dialog-success {
+  border: 1px solid rgba(57, 208, 163, 0.38);
+  border-radius: 8px;
+  background: rgba(57, 208, 163, 0.08);
+  color: #b9f4e2;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.endpoint-results {
+  display: grid;
+  min-height: 0;
+  gap: 10px;
+}
+
+.endpoint-results-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+  align-items: end;
+  gap: 12px;
+}
+
+.endpoint-results-head div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.endpoint-results-head strong {
+  font-size: 13px;
+}
+
+.endpoint-results-head span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.endpoint-results-head input {
+  height: 38px;
+  min-height: 38px;
+}
+
+.endpoint-list {
+  display: grid;
+  max-height: 300px;
+  overflow-y: auto;
+  gap: 6px;
+  padding-right: 2px;
+}
+
+.endpoint-row {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr) auto;
+  min-height: 52px;
+  justify-content: stretch;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.method-badge {
+  align-self: center;
+  width: 56px;
+  border-radius: 6px;
+  background: rgba(139, 152, 167, 0.18);
+  color: var(--text);
+  padding: 5px 0;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.method-get {
+  color: #80c7ff;
+}
+
+.method-post {
+  color: #83f1c9;
+}
+
+.method-put,
+.method-patch {
+  color: #ffd888;
+}
+
+.method-delete {
+  color: #ff9f9f;
+}
+
+.endpoint-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.endpoint-main strong,
+.endpoint-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.endpoint-main small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.deprecated-badge {
+  align-self: center;
+  border: 1px solid rgba(245, 196, 81, 0.34);
+  border-radius: 999px;
+  color: #ffe4a1;
+  padding: 4px 7px;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.endpoint-empty {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 14px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .help-header {

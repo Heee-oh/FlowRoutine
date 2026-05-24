@@ -45,3 +45,7 @@ func (a *App) StopLoad() error {
 func (a *App) Snapshot() (bridge.SnapshotResponse, error) {
 	return a.controller.Snapshot()
 }
+
+func (a *App) ImportOpenAPI(rawURL string) (bridge.OpenAPIImportResponse, error) {
+	return a.controller.ImportOpenAPI(a.ctx, rawURL)
+}

@@ -10,7 +10,7 @@ import {
 } from "@xyflow/react";
 import { HelpCircle, Play, Square, Workflow } from "lucide-react";
 import { FlowCanvas } from "./components/FlowCanvas";
-import { HelpDialog, StartConfirmDialog } from "./components/Dialogs";
+import { HelpDialog, OpenAPIImportDialog, StartConfirmDialog } from "./components/Dialogs";
 import { MetricGrid, MetricsChart } from "./components/Metrics";
 import { NodeInspector } from "./components/NodeInspector";
 import { NodePalette } from "./components/NodePalette";
@@ -24,6 +24,7 @@ import {
   initialFlowNodes,
   loadSavedScenarios,
   nextNodeIndexFromNodes,
+  openAPIEndpointToRequestSettings,
   refreshNodeDisplay,
   reviveSavedNodes,
   saveScenario,
@@ -31,8 +32,8 @@ import {
 import type { FlowNodeData, FlowNodeKind, RuntimeAuthSecret, SafetyAssessment, SavedScenario } from "./flowTypes";
 import type { HelpLanguage, HelpTopic } from "./help";
 import { DEFAULT_METRIC_WINDOW_MS, useLoadStore, useMetricsStore } from "./store";
-import type { StartRequest } from "./types";
-import { onMetricsBatch, startLoad, stopLoad } from "./wails";
+import type { OpenAPIEndpoint, OpenAPIImportResponse, StartRequest } from "./types";
+import { importOpenAPI, onMetricsBatch, startLoad, stopLoad } from "./wails";
 
 export function App() {
   const running = useLoadStore((state) => state.running);
@@ -50,6 +51,11 @@ export function App() {
   const [pendingScenario, setPendingScenario] = useState<SavedScenario | null>(null);
   const [helpTopic, setHelpTopic] = useState<HelpTopic | null>(null);
   const [helpLanguage, setHelpLanguage] = useState<HelpLanguage>("ko");
+  const [openAPIImportOpen, setOpenAPIImportOpen] = useState(false);
+  const [openAPIImportLoading, setOpenAPIImportLoading] = useState(false);
+  const [openAPIImportError, setOpenAPIImportError] = useState("");
+  const [openAPIImportMessage, setOpenAPIImportMessage] = useState("");
+  const [openAPIImported, setOpenAPIImported] = useState<OpenAPIImportResponse | null>(null);
   const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>(loadSavedScenarios);
   const [authSecrets, setAuthSecrets] = useState<Record<string, RuntimeAuthSecret>>({});
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<Node<FlowNodeData>>(initialFlowNodes);
@@ -232,6 +238,59 @@ export function App() {
     setPendingScenario(null);
   }, []);
 
+  const handleOpenOpenAPIImport = useCallback(() => {
+    setOpenAPIImportError("");
+    setOpenAPIImportMessage("");
+    setOpenAPIImported(null);
+    setOpenAPIImportOpen(true);
+  }, []);
+
+  const handleCloseOpenAPIImport = useCallback(() => {
+    if (!openAPIImportLoading) {
+      setOpenAPIImportOpen(false);
+      setOpenAPIImportError("");
+      setOpenAPIImportMessage("");
+      setOpenAPIImported(null);
+    }
+  }, [openAPIImportLoading]);
+
+  const handleSubmitOpenAPIImport = useCallback(async (url: string) => {
+    setOpenAPIImportLoading(true);
+    setOpenAPIImportError("");
+    setOpenAPIImportMessage("");
+    setOpenAPIImported(null);
+    try {
+      const imported = await importOpenAPI(url);
+      setOpenAPIImported(imported);
+      setOpenAPIImportMessage(`Loaded ${imported.title || "OpenAPI document"} (${imported.openapi}) with ${imported.endpoints.length} endpoints`);
+    } catch (err) {
+      setOpenAPIImportError(err instanceof Error ? err.message : "Failed to load OpenAPI document");
+    } finally {
+      setOpenAPIImportLoading(false);
+    }
+  }, []);
+
+  const handleSelectOpenAPIEndpoint = useCallback((endpoint: OpenAPIEndpoint) => {
+    if (!openAPIImported) {
+      return;
+    }
+    const index = nextNodeIndex.current;
+    nextNodeIndex.current += 1;
+    const node = createFlowNode(
+      "request",
+      index,
+      openAPIEndpointToRequestSettings(endpoint, openAPIImported.sourceUrl),
+      undefined,
+      handleDeleteNode,
+    );
+    setFlowNodes((currentNodes) => currentNodes.concat(node));
+    setSelectedNodeId(node.id);
+    setOpenAPIImportOpen(false);
+    setOpenAPIImportError("");
+    setOpenAPIImportMessage("");
+    setOpenAPIImported(null);
+  }, [handleDeleteNode, openAPIImported, setFlowNodes]);
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -280,7 +339,7 @@ export function App() {
           </div>
         </header>
 
-        <NodePalette onAddNode={handleAddNode} />
+        <NodePalette onAddNode={handleAddNode} onOpenImport={handleOpenOpenAPIImport} />
 
         <FlowCanvas
           nodes={flowNodes}
@@ -309,6 +368,17 @@ export function App() {
           language={helpLanguage}
           setLanguage={setHelpLanguage}
           onClose={() => setHelpTopic(null)}
+        />
+      ) : null}
+      {openAPIImportOpen ? (
+        <OpenAPIImportDialog
+          error={openAPIImportError}
+          imported={openAPIImported}
+          loading={openAPIImportLoading}
+          message={openAPIImportMessage}
+          onCancel={handleCloseOpenAPIImport}
+          onSelectEndpoint={handleSelectOpenAPIEndpoint}
+          onSubmit={handleSubmitOpenAPIImport}
         />
       ) : null}
     </div>
