@@ -1,7 +1,7 @@
 import type { Header, MetricsBatch, QualityGate, ScenarioStep, StartRequest, StatusCodeCount } from "./types";
 
 export type RunReport = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   generatedAtUnixMs: number;
   run: {
     targetUrl: string;
@@ -51,6 +51,7 @@ type ReportSummary = {
   failedRequests: number;
   successRate: number;
   failureRate: number;
+  latencySamples: number;
   latencyMs: {
     avg: number;
     min: number;
@@ -109,7 +110,7 @@ export type BaselineComparison = {
 };
 
 type BaselineSnapshot = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   key: string;
   savedAtUnixMs: number;
   targetUrl: string;
@@ -120,11 +121,12 @@ type BaselineSnapshot = {
   p99LatencyMs: number;
 };
 
-const baselineStorageKey = "flowroutine:run-baselines:v1";
+const baselineStorageKey = "flowroutine:run-baselines:v2";
 const maxBaselines = 24;
 
 export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): RunReport {
   const finalBatch = batches[batches.length - 1] ?? emptyBatch();
+  const runLatency = finalBatch.runLatency;
   const qualityGate = normalizeQualityGate(request.qualityGate);
   const startedAtUnixMs = validTimestamp(finalBatch.startedAtUnixMs)
     ? finalBatch.startedAtUnixMs
@@ -135,7 +137,7 @@ export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): 
   const averageRps = elapsedMs > 0 ? total / (elapsedMs / 1_000) : 0;
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAtUnixMs: Date.now(),
     run: {
       targetUrl: request.config.url,
@@ -166,13 +168,14 @@ export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): 
       failedRequests: finalBatch.failed,
       successRate: ratio(finalBatch.success, total),
       failureRate: ratio(finalBatch.failed, total),
+      latencySamples: runLatency.samples,
       latencyMs: {
-        avg: finalBatch.avgLatencyMs,
-        min: finalBatch.minLatencyMs,
-        max: finalBatch.maxLatencyMs,
-        p95: finalBatch.p95LatencyMs,
-        p99: finalBatch.p99LatencyMs,
-        p999: finalBatch.p999LatencyMs,
+        avg: runLatency.avgMs,
+        min: runLatency.minMs,
+        max: runLatency.maxMs,
+        p95: runLatency.p95Ms,
+        p99: runLatency.p99Ms,
+        p999: runLatency.p999Ms,
       },
       failures: {
         timeout: finalBatch.timeout,
@@ -200,8 +203,8 @@ export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): 
       rps: batch.rps,
       total: batch.total,
       failed: batch.failed,
-      p95LatencyMs: batch.p95LatencyMs,
-      p99LatencyMs: batch.p99LatencyMs,
+      p95LatencyMs: batch.intervalLatency.p95Ms,
+      p99LatencyMs: batch.intervalLatency.p99Ms,
     })),
   };
 }
@@ -236,8 +239,8 @@ function evaluateQualityGate(gate: QualityGate, finalBatch: MetricsBatch, averag
   const failureRatePct = finalBatch.total > 0 ? (finalBatch.failed / finalBatch.total) * 100 : 0;
   const checks = [
     upperBoundCheck("failure_rate_pct", failureRatePct, gate.maxFailureRatePct),
-    upperBoundCheck("p95_latency_ms", finalBatch.p95LatencyMs, gate.maxP95LatencyMs),
-    upperBoundCheck("p99_latency_ms", finalBatch.p99LatencyMs, gate.maxP99LatencyMs),
+    upperBoundCheck("p95_latency_ms", finalBatch.runLatency.p95Ms, gate.maxP95LatencyMs),
+    upperBoundCheck("p99_latency_ms", finalBatch.runLatency.p99Ms, gate.maxP99LatencyMs),
     lowerBoundCheck("average_rps", averageRps, gate.minRps),
   ].filter((check): check is QualityGateCheck => Boolean(check));
   return {
@@ -289,7 +292,7 @@ function baselineKey(request: StartRequest) {
 
 function buildBaselineSnapshot(key: string, report: RunReport): BaselineSnapshot {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     key,
     savedAtUnixMs: report.generatedAtUnixMs,
     targetUrl: report.run.targetUrl,
@@ -379,7 +382,7 @@ function isBaselineSnapshot(value: unknown): value is BaselineSnapshot {
     return false;
   }
   const snapshot = value as BaselineSnapshot;
-  return snapshot.schemaVersion === 1 &&
+  return snapshot.schemaVersion === 2 &&
     typeof snapshot.key === "string" &&
     typeof snapshot.savedAtUnixMs === "number" &&
     typeof snapshot.averageRps === "number" &&
@@ -478,12 +481,22 @@ function emptyBatch(): MetricsBatch {
     connRefused: 0,
     otherErrors: 0,
     assertionsFailed: 0,
-    avgLatencyMs: 0,
-    minLatencyMs: 0,
-    maxLatencyMs: 0,
-    p95LatencyMs: 0,
-    p99LatencyMs: 0,
-    p999LatencyMs: 0,
+    intervalLatency: {
+      samples: 0,
+      avgMs: 0,
+      p95Ms: 0,
+      p99Ms: 0,
+      p999Ms: 0,
+    },
+    runLatency: {
+      samples: 0,
+      avgMs: 0,
+      minMs: 0,
+      maxMs: 0,
+      p95Ms: 0,
+      p99Ms: 0,
+      p999Ms: 0,
+    },
     bytesRead: 0,
     bytesWritten: 0,
     statusCodes: [],

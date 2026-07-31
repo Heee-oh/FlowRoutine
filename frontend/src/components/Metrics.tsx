@@ -17,12 +17,12 @@ export const MetricGrid = memo(function MetricGrid() {
         <Metric icon={<Activity size={17} />} label="Total" value={formatNumber(latest?.total ?? 0)} />
         <Metric icon={<Network size={17} />} label="Success" value={formatNumber(latest?.success ?? 0)} />
         <Metric icon={<Network size={17} />} label="Failed" value={formatNumber(latest?.failed ?? 0)} />
-        <Metric icon={<Timer size={17} />} label="Avg latency" value={`${formatNumber(latest?.avgLatencyMs ?? 0, 2)} ms`} />
-        <Metric icon={<Timer size={17} />} label="P99 latency" value={`${formatNumber(latest?.p99LatencyMs ?? 0, 2)} ms`} />
+        <Metric icon={<Timer size={17} />} label="Avg latency" value={`${formatNumber(latest?.intervalLatency.avgMs ?? 0, 2)} ms`} />
+        <Metric icon={<Timer size={17} />} label="P99 latency" value={`${formatNumber(latest?.intervalLatency.p99Ms ?? 0, 2)} ms`} />
       </div>
       <div className="metrics-secondary">
-        <MetricDetail label="P95" value={`${formatNumber(latest?.p95LatencyMs ?? 0, 2)} ms`} />
-        <MetricDetail label="P99.9" value={`${formatNumber(latest?.p999LatencyMs ?? 0, 2)} ms`} />
+        <MetricDetail label="P95" value={`${formatNumber(latest?.intervalLatency.p95Ms ?? 0, 2)} ms`} />
+        <MetricDetail label="P99.9" value={`${formatNumber(latest?.intervalLatency.p999Ms ?? 0, 2)} ms`} />
         <MetricDetail label="Timeout" value={formatNumber(latest?.timeout ?? 0)} />
         <MetricDetail label="DNS" value={formatNumber(latest?.dns ?? 0)} />
         <MetricDetail label="TLS" value={formatNumber(latest?.tls ?? 0)} />
@@ -293,10 +293,10 @@ function drawChart(canvas: HTMLCanvasElement, points: MetricsBatch[]) {
   const lastTs = points[points.length - 1].timestampUnixMs;
   const span = Math.max(1, lastTs - firstTs);
   const maxRps = niceMax(Math.max(1, ...points.map((point) => point.rps || 0)));
-  const maxLatency = niceMax(Math.max(1, ...points.map((point) => point.p99LatencyMs || point.avgLatencyMs || 0)));
+  const maxLatency = niceMax(Math.max(1, ...points.map((point) => point.intervalLatency.p99Ms || point.intervalLatency.avgMs || 0)));
 
   drawSeries(ctx, points, "rps", firstTs, span, maxRps, "#39d0a3", padding, chartWidth, chartHeight, true);
-  drawSeries(ctx, points, "p99LatencyMs", firstTs, span, maxLatency, "#5aa9ff", padding, chartWidth, chartHeight, false);
+  drawSeries(ctx, points, "latency", firstTs, span, maxLatency, "#5aa9ff", padding, chartWidth, chartHeight, false);
 
   ctx.fillStyle = "#8b98a7";
   ctx.font = "12px system-ui";
@@ -309,7 +309,7 @@ function drawChart(canvas: HTMLCanvasElement, points: MetricsBatch[]) {
 function drawSeries(
   ctx: CanvasRenderingContext2D,
   points: MetricsBatch[],
-  key: "rps" | "p99LatencyMs",
+  key: "rps" | "latency",
   firstTs: number,
   span: number,
   maxValue: number,
@@ -324,7 +324,7 @@ function drawSeries(
   ctx.beginPath();
   points.forEach((point, index) => {
     const x = padding.left + ((point.timestampUnixMs - firstTs) / span) * chartWidth;
-    const rawValue = point[key] || 0;
+    const rawValue = key === "rps" ? point.rps : point.intervalLatency.p99Ms;
     const normalized = logScale ? logNormalize(rawValue, maxValue) : Math.min(1, rawValue / maxValue);
     const y = padding.top + chartHeight - normalized * chartHeight;
     if (index === 0) {

@@ -64,15 +64,24 @@ export type MetricsBatch = {
   connRefused: number;
   otherErrors: number;
   assertionsFailed: number;
-  avgLatencyMs: number;
-  minLatencyMs: number;
-  maxLatencyMs: number;
-  p95LatencyMs: number;
-  p99LatencyMs: number;
-  p999LatencyMs: number;
+  intervalLatency: IntervalLatencyMetrics;
+  runLatency: CumulativeLatencyMetrics;
   bytesRead: number;
   bytesWritten: number;
   statusCodes: StatusCodeCount[];
+};
+
+export type IntervalLatencyMetrics = {
+  samples: number;
+  avgMs: number;
+  p95Ms: number;
+  p99Ms: number;
+  p999Ms: number;
+};
+
+export type CumulativeLatencyMetrics = IntervalLatencyMetrics & {
+  minMs: number;
+  maxMs: number;
 };
 
 export type StatusCodeCount = {
