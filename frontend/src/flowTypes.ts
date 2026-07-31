@@ -41,6 +41,10 @@ export type FlowNodeData = {
   rampUpMs?: number;
   batchIntervalMs?: number;
   latencySampleRate?: number;
+  maxFailureRatePct?: number;
+  maxP95LatencyMs?: number;
+  maxP99LatencyMs?: number;
+  minRps?: number;
   windowMs?: number;
   expectedStatus?: string;
   delayMs?: number;

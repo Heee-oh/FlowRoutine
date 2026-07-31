@@ -40,10 +40,19 @@ export type Capture = {
 export type StartRequest = {
   config: LoadConfig;
   batchIntervalMs: number;
+  qualityGate?: QualityGate;
+};
+
+export type QualityGate = {
+  maxFailureRatePct: number;
+  maxP95LatencyMs: number;
+  maxP99LatencyMs: number;
+  minRps: number;
 };
 
 export type MetricsBatch = {
   timestampUnixMs: number;
+  startedAtUnixMs: number;
   running: boolean;
   rps: number;
   total: number;

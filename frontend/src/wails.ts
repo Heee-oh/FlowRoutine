@@ -7,7 +7,10 @@ export function startLoad(request: StartRequest) {
   if (!startLoad) {
     return Promise.reject(new Error("Wails bridge is unavailable"));
   }
-  return startLoad(request);
+  return startLoad({
+    config: request.config,
+    batchIntervalMs: request.batchIntervalMs,
+  });
 }
 
 export function stopLoad() {

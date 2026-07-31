@@ -141,6 +141,7 @@ export function buildStartRequestFromGraph(
       scenarioSteps,
     },
     batchIntervalMs: numberValue(metricsNode?.data.batchIntervalMs, fallback.batchIntervalMs),
+    qualityGate: qualityGateFromMetricsNode(metricsNode),
   };
 }
 
@@ -164,7 +165,7 @@ export function refreshNodeDisplay(node: Node<FlowNodeData>): Node<FlowNodeData>
       data.caption = "think time";
       break;
     case "metrics":
-      data.value = "Batched";
+      data.value = gateCaption(data);
       data.caption = `${numberValue(data.batchIntervalMs, 150)}ms updates`;
       break;
     case "window":
@@ -173,6 +174,27 @@ export function refreshNodeDisplay(node: Node<FlowNodeData>): Node<FlowNodeData>
       break;
   }
   return { ...node, data };
+}
+
+function gateCaption(data: FlowNodeData) {
+  const maxFailureRatePct = numberValue(data.maxFailureRatePct, 1);
+  const maxP95LatencyMs = numberValue(data.maxP95LatencyMs, 500);
+  const maxP99LatencyMs = numberValue(data.maxP99LatencyMs, 1000);
+  const minRps = numberValue(data.minRps, 0);
+  if (maxFailureRatePct > 0 || maxP95LatencyMs > 0 || maxP99LatencyMs > 0 || minRps > 0) {
+    return "SLO gated";
+  }
+  return "Batched";
+}
+
+function qualityGateFromMetricsNode(metricsNode: Node<FlowNodeData> | undefined) {
+  const data = metricsNode?.data;
+  return {
+    maxFailureRatePct: numberValue(data?.maxFailureRatePct, 1),
+    maxP95LatencyMs: numberValue(data?.maxP95LatencyMs, 500),
+    maxP99LatencyMs: numberValue(data?.maxP99LatencyMs, 1000),
+    minRps: numberValue(data?.minRps, 0),
+  };
 }
 
 export function loadSavedScenarios(): SavedScenario[] {
@@ -349,11 +371,15 @@ function nodeTemplate(kind: FlowNodeKind, settings: Partial<FlowNodeData> | null
     case "metrics":
       return {
         label: "Metrics",
-        value: "Batched",
+        value: "SLO gated",
         caption: `${settings?.batchIntervalMs ?? 150}ms updates`,
         tone: "metrics",
         batchIntervalMs: settings?.batchIntervalMs ?? 150,
         latencySampleRate: settings?.latencySampleRate ?? 1,
+        maxFailureRatePct: settings?.maxFailureRatePct ?? 1,
+        maxP95LatencyMs: settings?.maxP95LatencyMs ?? 500,
+        maxP99LatencyMs: settings?.maxP99LatencyMs ?? 1000,
+        minRps: settings?.minRps ?? 0,
       };
     case "window":
       return {

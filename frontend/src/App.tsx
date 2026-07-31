@@ -51,6 +51,7 @@ export function App() {
   const setError = useLoadStore((state) => state.setError);
   const buildStartRequest = useLoadStore((state) => state.buildStartRequest);
   const pushBatch = useMetricsStore((state) => state.pushBatch);
+  const beginMetricsRun = useMetricsStore((state) => state.beginRun);
   const resetMetrics = useMetricsStore((state) => state.reset);
   const setMetricWindowMs = useMetricsStore((state) => state.setMetricWindowMs);
   const [pendingStart, setPendingStart] = useState<StartRequest | null>(null);
@@ -178,15 +179,16 @@ export function App() {
     try {
       setError("");
       setStopping(false);
-      resetMetrics();
+      beginMetricsRun(request);
       setRunning(true);
       await startLoad(request);
     } catch (err) {
+      resetMetrics();
       setRunning(false);
       setStopping(false);
       setError(err instanceof Error ? err.message : "Failed to start load test");
     }
-  }, [resetMetrics, setError, setRunning, setStopping]);
+  }, [beginMetricsRun, resetMetrics, setError, setRunning, setStopping]);
 
   const handleStart = useCallback(async () => {
     try {

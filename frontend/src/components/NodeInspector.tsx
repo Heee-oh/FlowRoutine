@@ -277,6 +277,25 @@ const NodeFields = memo(function NodeFields({
           <Field label="Latency sample rate">
             <NumberInput value={node.data.latencySampleRate ?? 1} min={1} onChange={(value) => updateNode({ latencySampleRate: value })} />
           </Field>
+          <div className="field-grid">
+            <Field label="Max fail %">
+              <NumberInput value={node.data.maxFailureRatePct ?? 1} min={0} onChange={(value) => updateNode({ maxFailureRatePct: value })} />
+            </Field>
+            <Field label="Min RPS">
+              <NumberInput value={node.data.minRps ?? 0} min={0} onChange={(value) => updateNode({ minRps: value })} />
+            </Field>
+          </div>
+          <div className="field-grid">
+            <Field label="Max P95 ms">
+              <NumberInput value={node.data.maxP95LatencyMs ?? 500} min={0} onChange={(value) => updateNode({ maxP95LatencyMs: value })} />
+            </Field>
+            <Field label="Max P99 ms">
+              <NumberInput value={node.data.maxP99LatencyMs ?? 1000} min={0} onChange={(value) => updateNode({ maxP99LatencyMs: value })} />
+            </Field>
+          </div>
+          <div className="inspector-note">
+            Set a gate to 0 to disable that pass/fail check.
+          </div>
         </>
       );
     case "window":

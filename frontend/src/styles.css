@@ -621,8 +621,61 @@ button:disabled {
 
 .metrics-footer {
   display: flex;
+  align-items: center;
+  gap: 6px;
   justify-content: flex-end;
   padding-top: 1px;
+}
+
+.metrics-footer-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-right: auto;
+}
+
+.quality-gate,
+.baseline-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.quality-gate-pass {
+  border-color: rgba(57, 208, 163, 0.42);
+  color: var(--accent);
+}
+
+.quality-gate-fail {
+  border-color: rgba(255, 107, 107, 0.42);
+  color: var(--danger);
+}
+
+.baseline-new-baseline,
+.baseline-stable {
+  border-color: rgba(139, 152, 167, 0.38);
+  color: var(--muted);
+}
+
+.baseline-improved {
+  border-color: rgba(57, 208, 163, 0.42);
+  color: var(--accent);
+}
+
+.baseline-mixed {
+  border-color: rgba(245, 196, 81, 0.42);
+  color: var(--warning);
+}
+
+.baseline-regressed {
+  border-color: rgba(255, 107, 107, 0.42);
+  color: var(--danger);
 }
 
 .metric-details-button {

@@ -24,6 +24,7 @@ type Emitter interface {
 
 type MetricsBatch struct {
 	TimestampUnixMs  int64             `json:"timestampUnixMs"`
+	StartedAtUnixMs  int64             `json:"startedAtUnixMs"`
 	Running          bool              `json:"running"`
 	RPS              float64           `json:"rps"`
 	Total            uint64            `json:"total"`
@@ -140,6 +141,13 @@ func buildMetricsBatch(previous engine.Snapshot, current engine.Snapshot, runnin
 	latencyDelta := current.TotalLatencyNano - previous.TotalLatencyNano
 	latencySampleDelta := current.LatencySamples - previous.LatencySamples
 	latencyBucketDelta := subtractLatencyBuckets(previous.LatencyBuckets, current.LatencyBuckets)
+	startedAt := current.StartedAt
+	if startedAt.IsZero() {
+		startedAt = previous.StartedAt
+	}
+	if startedAt.IsZero() {
+		startedAt = current.At
+	}
 
 	var rps float64
 	var avgLatencyMs float64
@@ -152,6 +160,7 @@ func buildMetricsBatch(previous engine.Snapshot, current engine.Snapshot, runnin
 
 	return MetricsBatch{
 		TimestampUnixMs:  now.UnixMilli(),
+		StartedAtUnixMs:  startedAt.UnixMilli(),
 		Running:          running,
 		RPS:              rps,
 		Total:            current.TotalRequests,
