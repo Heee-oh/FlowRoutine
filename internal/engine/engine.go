@@ -36,8 +36,11 @@ type Engine struct {
 }
 
 type workerVariables struct {
-	iteration map[string]string
-	run       map[string]string
+	iteration        map[string]string
+	run              map[string]string
+	renderBuffer     []byte
+	eligibleCaptures []compiledVariableCapture
+	captureValues    []string
 }
 
 func newWorkerVariables() *workerVariables {
@@ -236,6 +239,7 @@ func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCo
 
 	req, err := e.acquireRequest(step, variables)
 	if err != nil {
+		variables.releaseRenderBuffer()
 		*lastStatus = 0
 		invalidateCaptures(step.captures, variables)
 		stats.RecordTemplateFailure()
@@ -279,6 +283,7 @@ func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCo
 
 	e.releaseResponse(resp)
 	e.releaseRequest(req)
+	variables.releaseRenderBuffer()
 	return true
 }
 
@@ -335,8 +340,8 @@ func (e *Engine) waitForRampUp(ctx context.Context, index int) bool {
 func (e *Engine) acquireRequest(step compiledRequestStep, variables *workerVariables) (*fasthttp.Request, error) {
 	req := e.reqPool.Get().(*fasthttp.Request)
 	req.Reset()
-	if step.requestURITemplated {
-		rendered, err := applyTemplateBytes(step.requestURI, variables)
+	if step.requestURITemplate.dynamic() {
+		rendered, err := variables.render(step.requestURITemplate)
 		if err != nil {
 			e.releaseRequest(req)
 			return nil, fmt.Errorf("request URL: %w", err)
@@ -348,8 +353,8 @@ func (e *Engine) acquireRequest(step compiledRequestStep, variables *workerVaria
 	req.Header.SetHostBytes(step.hostHeader)
 	req.Header.SetMethodBytes(step.method)
 	for i := range step.headers {
-		if step.headers[i].templated {
-			rendered, err := applyTemplateBytes(step.headers[i].value, variables)
+		if step.headers[i].template.dynamic() {
+			rendered, err := variables.render(step.headers[i].template)
 			if err != nil {
 				e.releaseRequest(req)
 				return nil, fmt.Errorf("header %q: %w", step.headers[i].name, err)
@@ -360,8 +365,8 @@ func (e *Engine) acquireRequest(step compiledRequestStep, variables *workerVaria
 		}
 	}
 	if len(step.body) > 0 {
-		if step.bodyTemplated {
-			rendered, err := applyTemplateBytes(step.body, variables)
+		if step.bodyTemplate.dynamic() {
+			rendered, err := variables.render(step.bodyTemplate)
 			if err != nil {
 				e.releaseRequest(req)
 				return nil, fmt.Errorf("request body: %w", err)
@@ -374,36 +379,8 @@ func (e *Engine) acquireRequest(step compiledRequestStep, variables *workerVaria
 	return req, nil
 }
 
-func applyTemplateBytes(value []byte, variables *workerVariables) ([]byte, error) {
-	raw := string(value)
-	var rendered strings.Builder
-	rendered.Grow(len(raw))
-	for offset := 0; offset < len(raw); {
-		startOffset := strings.Index(raw[offset:], "{{")
-		if startOffset < 0 {
-			rendered.WriteString(raw[offset:])
-			break
-		}
-		start := offset + startOffset
-		rendered.WriteString(raw[offset:start])
-		endOffset := strings.Index(raw[start+2:], "}}")
-		if endOffset < 0 {
-			return nil, errors.New("template is not closed")
-		}
-		end := start + 2 + endOffset
-		name := strings.TrimSpace(raw[start+2 : end])
-		variableValue, ok := variables.value(name)
-		if !ok {
-			return nil, fmt.Errorf("template variable %q is unavailable for this iteration", name)
-		}
-		rendered.WriteString(variableValue)
-		offset = end + 2
-	}
-	return []byte(rendered.String()), nil
-}
-
 func captureVariables(body []byte, status int, captures []compiledVariableCapture, variables *workerVariables) error {
-	eligible := make([]compiledVariableCapture, 0, len(captures))
+	eligible := variables.eligibleCaptures[:0]
 	for _, capture := range captures {
 		if capture.scope == VariableScopeRun && variables.runValueExists(capture.name) {
 			continue
@@ -414,6 +391,8 @@ func captureVariables(body []byte, status int, captures []compiledVariableCaptur
 		}
 		eligible = append(eligible, capture)
 	}
+	variables.eligibleCaptures = eligible
+	clear(variables.captureValues)
 	if len(eligible) == 0 {
 		return nil
 	}
@@ -423,11 +402,17 @@ func captureVariables(body []byte, status int, captures []compiledVariableCaptur
 		invalidateCaptures(eligible, variables)
 		return fmt.Errorf("capture response is invalid JSON: %w", err)
 	}
-	values := make([]string, len(eligible))
+	if cap(variables.captureValues) < len(eligible) {
+		variables.captureValues = make([]string, len(eligible))
+	} else {
+		variables.captureValues = variables.captureValues[:len(eligible)]
+	}
+	values := variables.captureValues
 	for index, capture := range eligible {
 		value, err := jsonPathValue(document, capture.path)
 		if err != nil {
 			invalidateCaptures(eligible, variables)
+			clear(values)
 			return fmt.Errorf("capture %q path %q: %w", capture.name, formatJSONPath(capture.path), err)
 		}
 		values[index] = stringifyCaptureValue(value)
@@ -435,6 +420,7 @@ func captureVariables(body []byte, status int, captures []compiledVariableCaptur
 	for index, capture := range eligible {
 		variables.set(capture, values[index])
 	}
+	clear(values)
 	return nil
 }
 
