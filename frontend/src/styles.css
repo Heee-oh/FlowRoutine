@@ -657,6 +657,11 @@ button:disabled {
   color: var(--danger);
 }
 
+.quality-gate-insufficient {
+  border-color: rgba(245, 196, 81, 0.42);
+  color: var(--warning);
+}
+
 .baseline-new-baseline,
 .baseline-stable {
   border-color: rgba(139, 152, 167, 0.38);

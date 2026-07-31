@@ -105,6 +105,7 @@ export type MetricsBatch = {
   assertionsFailed: number;
   captureFailures: number;
   templateFailures: number;
+  latencyPercentileErrorBoundPct: number;
   intervalLatency: IntervalLatencyMetrics;
   runLatency: CumulativeLatencyMetrics;
   bytesRead: number;

@@ -52,6 +52,7 @@ describe("buildRunReport", () => {
       assertionsFailed: 0,
       captureFailures: 0,
       templateFailures: 0,
+      latencyPercentileErrorBoundPct: 2,
       intervalLatency: {
         samples: 10,
         avgMs: 1,
@@ -82,6 +83,8 @@ describe("buildRunReport", () => {
     expect(report.run.batchCount).toBe(36_000);
     expect(report.summary.totalRequests).toBe(100);
     expect(report.summary.latencySamples).toBe(100);
+    expect(report.summary.effectiveLatencySampleRate).toBe(1);
+    expect(report.summary.latencyPercentileErrorBoundPct).toBe(2);
     expect(report.summary.latencyMs).toEqual({
       avg: 900.1,
       min: 1,
@@ -95,6 +98,33 @@ describe("buildRunReport", () => {
       p99LatencyMs: 1,
     });
     expect(report.qualityGate.passed).toBe(false);
+    expect(report.qualityGate.status).toBe("fail");
+  });
+
+  it("withholds percentile gates when the sampled rank cannot resolve the tail", () => {
+    const report = buildRunReport(createRequest(), reportMetrics([completedBatch(100, 19)]));
+
+    expect(report.summary.totalRequests).toBe(100);
+    expect(report.summary.latencySamples).toBe(19);
+    expect(report.summary.effectiveLatencySampleRate).toBe(0.19);
+    expect(report.qualityGate.status).toBe("insufficient");
+    expect(report.qualityGate.passed).toBeNull();
+    expect(report.qualityGate.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "p95_latency_ms",
+        status: "insufficient",
+        passed: null,
+        samples: 19,
+        minimumSamples: 20,
+      }),
+      expect.objectContaining({
+        name: "p99_latency_ms",
+        status: "insufficient",
+        passed: null,
+        samples: 19,
+        minimumSamples: 100,
+      }),
+    ]));
   });
 
   it("redacts secrets from report URLs, headers, scenario metadata, and baseline keys", () => {
@@ -123,7 +153,7 @@ describe("buildRunReport", () => {
     otherSecrets.config.url = "https://bob:other@example.com/items?access_token=different";
     otherSecrets.config.scenarioSteps[0].url = "https://example.com/items?X-Amz-Signature=different";
 
-    expect(report.schemaVersion).toBe(4);
+    expect(report.schemaVersion).toBe(5);
     expect(serialized).not.toMatch(/alice|password|report-(?:url|auth|step|api)-secret/);
     expect(report.run.targetUrl).toContain("REDACTED");
     expect(report.config.headers[0].value).toBe("[redacted]");
@@ -199,5 +229,45 @@ function reportMetrics(batches: MetricsBatch[]) {
     finalBatch: batches[batches.length - 1] ?? null,
     timeline: batches.map(metricHistoryPoint),
     batchCount: batches.length,
+  };
+}
+
+function completedBatch(total: number, samples: number): MetricsBatch {
+  return {
+    timestampUnixMs: 2_000,
+    startedAtUnixMs: 1_000,
+    running: false,
+    rps: total,
+    total,
+    success: total,
+    failed: 0,
+    timeout: 0,
+    dns: 0,
+    tls: 0,
+    connRefused: 0,
+    otherErrors: 0,
+    assertionsFailed: 0,
+    captureFailures: 0,
+    templateFailures: 0,
+    latencyPercentileErrorBoundPct: 2,
+    intervalLatency: {
+      samples,
+      avgMs: 100,
+      p95Ms: 100,
+      p99Ms: 200,
+      p999Ms: 300,
+    },
+    runLatency: {
+      samples,
+      avgMs: 100,
+      minMs: 50,
+      maxMs: 300,
+      p95Ms: 100,
+      p99Ms: 200,
+      p999Ms: 300,
+    },
+    bytesRead: 0,
+    bytesWritten: 0,
+    statusCodes: [{ code: 200, count: total }],
   };
 }

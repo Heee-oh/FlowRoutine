@@ -23,26 +23,27 @@ type Emitter interface {
 }
 
 type MetricsBatch struct {
-	TimestampUnixMs  int64                    `json:"timestampUnixMs"`
-	StartedAtUnixMs  int64                    `json:"startedAtUnixMs"`
-	Running          bool                     `json:"running"`
-	RPS              float64                  `json:"rps"`
-	Total            uint64                   `json:"total"`
-	Success          uint64                   `json:"success"`
-	Failed           uint64                   `json:"failed"`
-	Timeout          uint64                   `json:"timeout"`
-	DNS              uint64                   `json:"dns"`
-	TLS              uint64                   `json:"tls"`
-	ConnRefused      uint64                   `json:"connRefused"`
-	OtherErrors      uint64                   `json:"otherErrors"`
-	AssertionsFailed uint64                   `json:"assertionsFailed"`
-	CaptureFailures  uint64                   `json:"captureFailures"`
-	TemplateFailures uint64                   `json:"templateFailures"`
-	IntervalLatency  IntervalLatencyMetrics   `json:"intervalLatency"`
-	RunLatency       CumulativeLatencyMetrics `json:"runLatency"`
-	BytesRead        uint64                   `json:"bytesRead"`
-	BytesWritten     uint64                   `json:"bytesWritten"`
-	StatusCodes      []StatusCodeCount        `json:"statusCodes"`
+	TimestampUnixMs                int64                    `json:"timestampUnixMs"`
+	StartedAtUnixMs                int64                    `json:"startedAtUnixMs"`
+	Running                        bool                     `json:"running"`
+	RPS                            float64                  `json:"rps"`
+	Total                          uint64                   `json:"total"`
+	Success                        uint64                   `json:"success"`
+	Failed                         uint64                   `json:"failed"`
+	Timeout                        uint64                   `json:"timeout"`
+	DNS                            uint64                   `json:"dns"`
+	TLS                            uint64                   `json:"tls"`
+	ConnRefused                    uint64                   `json:"connRefused"`
+	OtherErrors                    uint64                   `json:"otherErrors"`
+	AssertionsFailed               uint64                   `json:"assertionsFailed"`
+	CaptureFailures                uint64                   `json:"captureFailures"`
+	TemplateFailures               uint64                   `json:"templateFailures"`
+	LatencyPercentileErrorBoundPct float64                  `json:"latencyPercentileErrorBoundPct"`
+	IntervalLatency                IntervalLatencyMetrics   `json:"intervalLatency"`
+	RunLatency                     CumulativeLatencyMetrics `json:"runLatency"`
+	BytesRead                      uint64                   `json:"bytesRead"`
+	BytesWritten                   uint64                   `json:"bytesWritten"`
+	StatusCodes                    []StatusCodeCount        `json:"statusCodes"`
 }
 
 type IntervalLatencyMetrics struct {
@@ -156,7 +157,7 @@ func buildMetricsBatch(previous engine.Snapshot, current engine.Snapshot, runnin
 	totalDelta := current.TotalRequests - previous.TotalRequests
 	latencyDelta := current.TotalLatencyNano - previous.TotalLatencyNano
 	latencySampleDelta := current.LatencySamples - previous.LatencySamples
-	latencyBucketDelta := subtractLatencyBuckets(previous.LatencyBuckets, current.LatencyBuckets)
+	latencyBucketDelta := subtractLatencyBuckets(&previous.LatencyBuckets, &current.LatencyBuckets)
 	startedAt := current.StartedAt
 	if startedAt.IsZero() {
 		startedAt = previous.StartedAt
@@ -171,30 +172,31 @@ func buildMetricsBatch(previous engine.Snapshot, current engine.Snapshot, runnin
 	}
 
 	return MetricsBatch{
-		TimestampUnixMs:  now.UnixMilli(),
-		StartedAtUnixMs:  startedAt.UnixMilli(),
-		Running:          running,
-		RPS:              rps,
-		Total:            current.TotalRequests,
-		Success:          current.SuccessRequests,
-		Failed:           current.FailedRequests,
-		Timeout:          current.TimeoutFailures,
-		DNS:              current.DNSFailures,
-		TLS:              current.TLSFailures,
-		ConnRefused:      current.ConnRefused,
-		OtherErrors:      current.OtherFailures,
-		AssertionsFailed: current.AssertionFailures,
-		CaptureFailures:  current.CaptureFailures,
-		TemplateFailures: current.TemplateFailures,
-		IntervalLatency:  intervalLatencyMetrics(latencyDelta, latencySampleDelta, latencyBucketDelta),
-		RunLatency:       cumulativeLatencyMetrics(current),
-		BytesRead:        current.BytesRead,
-		BytesWritten:     current.BytesWritten,
-		StatusCodes:      buildStatusCodeCounts(current.StatusCodes),
+		TimestampUnixMs:                now.UnixMilli(),
+		StartedAtUnixMs:                startedAt.UnixMilli(),
+		Running:                        running,
+		RPS:                            rps,
+		Total:                          current.TotalRequests,
+		Success:                        current.SuccessRequests,
+		Failed:                         current.FailedRequests,
+		Timeout:                        current.TimeoutFailures,
+		DNS:                            current.DNSFailures,
+		TLS:                            current.TLSFailures,
+		ConnRefused:                    current.ConnRefused,
+		OtherErrors:                    current.OtherFailures,
+		AssertionsFailed:               current.AssertionFailures,
+		CaptureFailures:                current.CaptureFailures,
+		TemplateFailures:               current.TemplateFailures,
+		LatencyPercentileErrorBoundPct: engine.LatencyHistogramRelativeErrorBound * 100,
+		IntervalLatency:                intervalLatencyMetrics(latencyDelta, latencySampleDelta, &latencyBucketDelta),
+		RunLatency:                     cumulativeLatencyMetrics(&current),
+		BytesRead:                      current.BytesRead,
+		BytesWritten:                   current.BytesWritten,
+		StatusCodes:                    buildStatusCodeCounts(current.StatusCodes),
 	}
 }
 
-func intervalLatencyMetrics(totalLatencyNano uint64, samples uint64, buckets [engine.LatencyBucketCount]uint64) IntervalLatencyMetrics {
+func intervalLatencyMetrics(totalLatencyNano uint64, samples uint64, buckets *[engine.LatencyBucketCount]uint64) IntervalLatencyMetrics {
 	return IntervalLatencyMetrics{
 		Samples: samples,
 		AvgMs:   averageLatencyMs(totalLatencyNano, samples),
@@ -204,15 +206,15 @@ func intervalLatencyMetrics(totalLatencyNano uint64, samples uint64, buckets [en
 	}
 }
 
-func cumulativeLatencyMetrics(snapshot engine.Snapshot) CumulativeLatencyMetrics {
+func cumulativeLatencyMetrics(snapshot *engine.Snapshot) CumulativeLatencyMetrics {
 	return CumulativeLatencyMetrics{
 		Samples: snapshot.LatencySamples,
 		AvgMs:   averageLatencyMs(snapshot.TotalLatencyNano, snapshot.LatencySamples),
 		MinMs:   float64(snapshot.MinLatencyNano) / float64(time.Millisecond),
 		MaxMs:   float64(snapshot.MaxLatencyNano) / float64(time.Millisecond),
-		P95Ms:   latencyPercentileMs(snapshot.LatencyBuckets, snapshot.LatencySamples, 0.95),
-		P99Ms:   latencyPercentileMs(snapshot.LatencyBuckets, snapshot.LatencySamples, 0.99),
-		P999Ms:  latencyPercentileMs(snapshot.LatencyBuckets, snapshot.LatencySamples, 0.999),
+		P95Ms:   latencyPercentileMs(&snapshot.LatencyBuckets, snapshot.LatencySamples, 0.95),
+		P99Ms:   latencyPercentileMs(&snapshot.LatencyBuckets, snapshot.LatencySamples, 0.99),
+		P999Ms:  latencyPercentileMs(&snapshot.LatencyBuckets, snapshot.LatencySamples, 0.999),
 	}
 }
 
@@ -223,7 +225,7 @@ func averageLatencyMs(totalLatencyNano uint64, samples uint64) float64 {
 	return float64(totalLatencyNano) / float64(samples) / float64(time.Millisecond)
 }
 
-func latencyPercentileMs(buckets [engine.LatencyBucketCount]uint64, samples uint64, percentile float64) float64 {
+func latencyPercentileMs(buckets *[engine.LatencyBucketCount]uint64, samples uint64, percentile float64) float64 {
 	return float64(engine.PercentileLatencyNano(buckets, samples, percentile)) / float64(time.Millisecond)
 }
 
@@ -237,7 +239,7 @@ func buildStatusCodeCounts(statusCodes [engine.HTTPStatusCount]uint64) []StatusC
 	return counts
 }
 
-func subtractLatencyBuckets(previous [engine.LatencyBucketCount]uint64, current [engine.LatencyBucketCount]uint64) [engine.LatencyBucketCount]uint64 {
+func subtractLatencyBuckets(previous *[engine.LatencyBucketCount]uint64, current *[engine.LatencyBucketCount]uint64) [engine.LatencyBucketCount]uint64 {
 	var delta [engine.LatencyBucketCount]uint64
 	for i := range delta {
 		if current[i] >= previous[i] {
