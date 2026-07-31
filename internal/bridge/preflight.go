@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"flowroutine/internal/engine"
 )
@@ -24,7 +26,9 @@ const (
 	MaxIOBufferBytes         = 1 << 20
 	MinResponseLimit         = 1 << 10
 	MaxResponseLimit         = 64 << 20
-	MaxScenarioSteps         = 512
+	MaxScenarioSteps         = engine.MaxScenarioSteps
+	MaxScenarioStepIDBytes   = engine.MaxScenarioStepIDBytes
+	MaxScenarioStepNameBytes = engine.MaxScenarioStepNameBytes
 	MaxScenarioBytes         = 64 << 20
 	MaxScenarioHosts         = 32
 	MaxHeadersPerRequest     = 128
@@ -103,7 +107,7 @@ func preflightStartRequest(request StartRequest) (PreflightResponse, error) {
 		warnings = append(warnings, PreflightWarning{
 			Code: "high_memory",
 			Message: fmt.Sprintf(
-				"Estimated peak request memory is %s; reduce virtual users, response limit, or request body size.",
+				"Estimated peak memory is %s; reduce virtual users, scenario steps, response limit, or request body size.",
 				formatResourceBytes(estimate.MemoryBytes),
 			),
 		})
@@ -399,19 +403,38 @@ func normalizeScenarioSteps(steps []ScenarioStep, defaultMethod string) ([]Scena
 	}
 
 	normalized := make([]ScenarioStep, 0, len(steps))
+	stepIDs := make(map[string]struct{}, len(steps))
 	requests := 0
 	scenarioBytes := 0
 	for index, step := range steps {
+		scope := fmt.Sprintf("scenario step %d", index+1)
 		scenarioBytes += scenarioStepBytes(step)
 		if scenarioBytes > MaxScenarioBytes {
 			return nil, fmt.Errorf("scenario must total at most %d bytes", MaxScenarioBytes)
 		}
 		next := step
+		next.ID = strings.TrimSpace(step.ID)
+		if next.ID == "" {
+			next.ID = fmt.Sprintf("step-%d", index+1)
+		}
+		if err := validateScenarioStepText(scope+" id", next.ID, MaxScenarioStepIDBytes); err != nil {
+			return nil, err
+		}
+		if _, exists := stepIDs[next.ID]; exists {
+			return nil, fmt.Errorf("%s id %q is duplicated", scope, next.ID)
+		}
+		stepIDs[next.ID] = struct{}{}
+		next.Name = strings.TrimSpace(step.Name)
+		if next.Name == "" {
+			next.Name = next.ID
+		}
+		if err := validateScenarioStepText(scope+" name", next.Name, MaxScenarioStepNameBytes); err != nil {
+			return nil, err
+		}
 		next.Kind = strings.TrimSpace(step.Kind)
 		if next.Kind == "" {
 			next.Kind = string(engine.StepRequest)
 		}
-		scope := fmt.Sprintf("scenario step %d", index+1)
 		switch engine.StepKind(next.Kind) {
 		case engine.StepRequest:
 			requests++
@@ -532,7 +555,7 @@ func normalizeCaptures(scope string, captures []Capture) ([]Capture, error) {
 }
 
 func scenarioStepBytes(step ScenarioStep) int {
-	total := len(step.Kind) + len(step.URL) + len(step.Method) + len(step.Body) + len(step.ExpectedStatus)
+	total := len(step.ID) + len(step.Name) + len(step.Kind) + len(step.URL) + len(step.Method) + len(step.Body) + len(step.ExpectedStatus)
 	for _, header := range step.Headers {
 		total += len(header.Name) + len(header.Value) + 4
 	}
@@ -540,6 +563,21 @@ func scenarioStepBytes(step ScenarioStep) int {
 		total += len(capture.Name) + len(capture.Path) + len(capture.Scope) + len(capture.OnStatus)
 	}
 	return total
+}
+
+func validateScenarioStepText(name string, value string, maximum int) error {
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%s must be valid UTF-8", name)
+	}
+	if len(value) > maximum {
+		return fmt.Errorf("%s must be at most %d bytes", name, maximum)
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return fmt.Errorf("%s contains a control character", name)
+		}
+	}
+	return nil
 }
 
 func normalizeBatchInterval(intervalMS int) (int, error) {
@@ -602,6 +640,7 @@ func validateHTTPToken(name string, value string, maximum int) error {
 func estimateResources(config LoadConfig) (PreflightEstimate, error) {
 	hosts := make(map[string]struct{})
 	largestBody := len(config.Body)
+	requestSteps := 1
 	sharedBytes := len(config.URL) + len(config.Method) + len(config.Body)
 	_, baseHeaderBytes, _ := normalizeHeaders("headers", config.Headers)
 	sharedBytes += baseHeaderBytes
@@ -610,8 +649,9 @@ func estimateResources(config LoadConfig) (PreflightEstimate, error) {
 		host, _ := validateHTTPURL("url", config.URL)
 		hosts[host] = struct{}{}
 	} else {
+		requestSteps = 0
 		for _, step := range config.ScenarioSteps {
-			sharedBytes += len(step.Kind) + len(step.URL) + len(step.Method) + len(step.Body) + len(step.ExpectedStatus)
+			sharedBytes += len(step.ID) + len(step.Name) + len(step.Kind) + len(step.URL) + len(step.Method) + len(step.Body) + len(step.ExpectedStatus)
 			for _, capture := range step.Captures {
 				sharedBytes += len(capture.Name) + len(capture.Path) + len(capture.Scope) + len(capture.OnStatus)
 			}
@@ -620,6 +660,7 @@ func estimateResources(config LoadConfig) (PreflightEstimate, error) {
 			if engine.StepKind(step.Kind) != engine.StepRequest {
 				continue
 			}
+			requestSteps++
 			host, _ := validateHTTPURL("scenario url", step.URL)
 			hosts[host] = struct{}{}
 			if len(step.Body) > largestBody {
@@ -638,10 +679,12 @@ func estimateResources(config LoadConfig) (PreflightEstimate, error) {
 			largestBody +
 			WorkerMemoryOverhead,
 	)
-	memoryBytes := uint64(sharedBytes) + uint64(config.VirtualUsers)*perWorkerBytes
+	memoryBytes := uint64(sharedBytes) +
+		uint64(config.VirtualUsers)*perWorkerBytes +
+		engine.EstimateStepMetricsBytes(requestSteps, config.VirtualUsers)
 	if memoryBytes > MaxEstimatedMemoryBytes {
 		return PreflightEstimate{}, fmt.Errorf(
-			"estimated peak request memory %s exceeds the %s safety limit; reduce virtual users, response limit, or body size",
+			"estimated peak memory %s exceeds the %s safety limit; reduce virtual users, scenario steps, response limit, or body size",
 			formatResourceBytes(memoryBytes),
 			formatResourceBytes(MaxEstimatedMemoryBytes),
 		)

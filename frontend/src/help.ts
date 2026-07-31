@@ -41,7 +41,8 @@ export const nodeHelpItems: Record<FlowNodeKind, HelpItem[]> = {
   ],
   metrics: [
     helpItem("Batch ms", "How often the backend sends metric updates to the UI (100-5000 ms). Slower updates reduce overhead on long runs.", "Backend가 UI로 metrics updates를 보내는 주기(100-5000ms)입니다. 장기 실행에서는 느린 주기가 overhead를 줄입니다."),
-    helpItem("Latency sample rate", "Records one latency sample every N requests per virtual user.", "Virtual user별로 N개 requests마다 latency sample 하나를 기록합니다."),
+    helpItem("Latency sample rate", "Samples every request step in one of every N iterations per virtual user, avoiding bias between steps.", "Virtual user별 N개 iteration 중 하나에서 모든 request step의 latency를 기록해 step 간 sampling 편향을 방지합니다."),
+    helpItem("Request-step diagnostics", "Status details ranks request steps by failures and P99 latency. Step summaries update at most once per second and on completion.", "Status details는 request step을 실패 수와 P99 latency 순으로 보여줍니다. Step 요약은 최대 초당 한 번과 실행 완료 시 갱신됩니다."),
   ],
   window: [
     helpItem("Window seconds", "How many seconds the bounded realtime chart covers. Extrema are retained while older detail is downsampled.", "제한된 realtime chart가 보여줄 시간 범위입니다. 최솟값과 최댓값은 유지하면서 오래된 세부 points를 downsample합니다."),

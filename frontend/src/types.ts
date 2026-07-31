@@ -43,6 +43,8 @@ export type LoadConfig = {
 };
 
 export type ScenarioStep = {
+  id?: string;
+  name?: string;
   kind: "request" | "delay" | "assertStatus";
   url?: string;
   method?: string;
@@ -133,6 +135,25 @@ export type MetricsBatch = {
   runLatency: CumulativeLatencyMetrics;
   bytesRead: number;
   bytesWritten: number;
+  statusCodes: StatusCodeCount[];
+  stepMetrics?: RequestStepMetrics[];
+};
+
+export type RequestStepMetrics = {
+  id: string;
+  name: string;
+  total: number;
+  success: number;
+  failed: number;
+  timeout: number;
+  dns: number;
+  tls: number;
+  connRefused: number;
+  otherErrors: number;
+  assertionsFailed: number;
+  captureFailures: number;
+  templateFailures: number;
+  runLatency: CumulativeLatencyMetrics;
   statusCodes: StatusCodeCount[];
 };
 

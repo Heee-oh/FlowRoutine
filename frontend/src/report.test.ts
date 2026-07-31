@@ -146,6 +146,35 @@ describe("buildRunReport", () => {
     expect(report.summary.droppedIterations).toBe(7);
   });
 
+  it("exports request-step failures, statuses, and latency diagnostics", () => {
+    const request = createRequest();
+    const batch = completedBatch(10, 10);
+    batch.success = 8;
+    batch.failed = 2;
+    batch.stepMetrics = [{
+      id: "request-items",
+      name: "GET example.com/items",
+      total: 10,
+      success: 8,
+      failed: 2,
+      timeout: 1,
+      dns: 0,
+      tls: 0,
+      connRefused: 0,
+      otherErrors: 1,
+      assertionsFailed: 1,
+      captureFailures: 0,
+      templateFailures: 0,
+      runLatency: { samples: 10, avgMs: 25, minMs: 1, maxMs: 50, p95Ms: 45, p99Ms: 50, p999Ms: 50 },
+      statusCodes: [{ code: 200, count: 8 }, { code: 500, count: 2 }],
+    }];
+
+    const report = buildRunReport(request, reportMetrics([batch]));
+
+    expect(report.summary.requestSteps).toEqual(batch.stepMetrics);
+    expect(report.summary.requestSteps.reduce((total, step) => total + step.total, 0)).toBe(report.summary.totalRequests);
+  });
+
   it("redacts secrets from report URLs, headers, scenario metadata, and baseline keys", () => {
     const request = createRequest();
     request.config.url = "https://alice:password@example.com/items?access_token=report-url-secret";
@@ -154,6 +183,8 @@ describe("buildRunReport", () => {
       { name: "Accept", value: "application/json" },
     ];
     request.config.scenarioSteps = [{
+      id: "request-items",
+      name: "GET /items?access_token=report-name-secret",
       kind: "request",
       method: "GET",
       url: "https://example.com/items?X-Amz-Signature=report-step-secret",
@@ -172,11 +203,12 @@ describe("buildRunReport", () => {
     otherSecrets.config.url = "https://bob:other@example.com/items?access_token=different";
     otherSecrets.config.scenarioSteps[0].url = "https://example.com/items?X-Amz-Signature=different";
 
-    expect(report.schemaVersion).toBe(6);
-    expect(serialized).not.toMatch(/alice|password|report-(?:url|auth|step|api)-secret/);
+    expect(report.schemaVersion).toBe(7);
+    expect(serialized).not.toMatch(/alice|password|report-(?:url|auth|step|api|name)-secret/);
     expect(report.run.targetUrl).toContain("REDACTED");
     expect(report.config.headers[0].value).toBe("[redacted]");
     expect(report.config.scenarioSteps[0].url).toContain("REDACTED");
+    expect(report.config.scenarioSteps[0].name).toContain("REDACTED");
     expect(report.config.scenarioSteps[0].captures).toEqual([{
       name: "token",
       path: "$.items[0].token",

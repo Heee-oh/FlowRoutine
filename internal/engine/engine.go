@@ -107,6 +107,7 @@ func New(cfg Config) (*Engine, error) {
 		return &fasthttp.Response{}
 	}
 	engine.stats.Init(compiled.profile.maxWorkers)
+	engine.stats.initRequestSteps(compiled.profile.maxWorkers, requestStepDescriptors(compiled.steps))
 
 	return engine, nil
 }
@@ -168,7 +169,12 @@ func (e *Engine) Snapshot() Snapshot {
 	return e.stats.Snapshot(time.Now())
 }
 
+func (e *Engine) RequestStepSnapshots() []RequestStepSnapshot {
+	return e.stats.RequestStepSnapshots()
+}
+
 type workerRuntime struct {
+	index           int
 	stats           *statsShard
 	sampleCountdown int
 	variables       *workerVariables
@@ -176,6 +182,7 @@ type workerRuntime struct {
 
 func (e *Engine) newWorkerRuntime(index int) workerRuntime {
 	return workerRuntime{
+		index:           index,
 		stats:           e.stats.Shard(index),
 		sampleCountdown: e.cfg.latencySampleRate,
 		variables:       newWorkerVariables(),
@@ -184,13 +191,17 @@ func (e *Engine) newWorkerRuntime(index int) workerRuntime {
 
 func (e *Engine) runIteration(ctx context.Context, runtime *workerRuntime) bool {
 	runtime.variables.beginIteration()
+	sampleLatency := runtime.nextLatencySample(e.cfg.latencySampleRate)
 	var lastStatus int
+	lastRequestMetricsIndex := -1
 	for i := range e.cfg.steps {
 		if !e.runStep(
 			ctx,
 			runtime.stats,
-			&runtime.sampleCountdown,
+			runtime.index,
+			sampleLatency,
 			&lastStatus,
+			&lastRequestMetricsIndex,
 			&e.cfg.steps[i],
 			runtime.variables,
 		) {
@@ -198,6 +209,15 @@ func (e *Engine) runIteration(ctx context.Context, runtime *workerRuntime) bool 
 		}
 	}
 	return true
+}
+
+func (runtime *workerRuntime) nextLatencySample(sampleRate int) bool {
+	if runtime.sampleCountdown <= 1 {
+		runtime.sampleCountdown = max(1, sampleRate)
+		return true
+	}
+	runtime.sampleCountdown--
+	return false
 }
 
 func newHostClient(cfg compiledConfig, client compiledClient) *fasthttp.HostClient {
@@ -214,26 +234,48 @@ func newHostClient(cfg compiledConfig, client compiledClient) *fasthttp.HostClie
 	}
 }
 
-func (e *Engine) runStep(ctx context.Context, stats *statsShard, sampleCountdown *int, lastStatus *int, step *compiledStep, variables *workerVariables) bool {
+func (e *Engine) runStep(
+	ctx context.Context,
+	stats *statsShard,
+	workerIndex int,
+	sampleLatency bool,
+	lastStatus *int,
+	lastRequestMetricsIndex *int,
+	step *compiledStep,
+	variables *workerVariables,
+) bool {
 	switch step.kind {
 	case compiledDelay:
 		return sleepContext(ctx, step.delay)
 	case compiledAssertStatus:
 		if !matchStatus(*lastStatus, step.expectedStatus) {
 			stats.RecordAssertionFailure()
+			if stepStats := e.stats.requestStepShard(*lastRequestMetricsIndex, workerIndex); stepStats != nil {
+				stepStats.RecordAssertionFailure()
+			}
 		}
 		return true
 	case compiledRequest:
-		return e.runRequestStep(ctx, stats, sampleCountdown, lastStatus, step.request, variables)
+		*lastRequestMetricsIndex = step.request.metricsIndex
+		return e.runRequestStep(ctx, stats, workerIndex, sampleLatency, lastStatus, step.request, variables)
 	default:
 		return true
 	}
 }
 
-func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCountdown *int, lastStatus *int, step compiledRequestStep, variables *workerVariables) bool {
+func (e *Engine) runRequestStep(
+	ctx context.Context,
+	stats *statsShard,
+	workerIndex int,
+	sampleLatency bool,
+	lastStatus *int,
+	step compiledRequestStep,
+	variables *workerVariables,
+) bool {
 	if e.limiter != nil && !e.limiter.Wait(ctx) {
 		return false
 	}
+	stepStats := e.stats.requestStepShard(step.metricsIndex, workerIndex)
 
 	req, err := e.acquireRequest(step, variables)
 	if err != nil {
@@ -241,16 +283,12 @@ func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCo
 		*lastStatus = 0
 		invalidateCaptures(step.captures, variables)
 		stats.RecordTemplateFailure()
+		if stepStats != nil {
+			stepStats.RecordTemplateFailure()
+		}
 		return true
 	}
 	resp := e.acquireResponse()
-	sampleLatency := false
-	if *sampleCountdown <= 1 {
-		sampleLatency = true
-		*sampleCountdown = e.cfg.latencySampleRate
-	} else {
-		*sampleCountdown = *sampleCountdown - 1
-	}
 	startedAt := time.Time{}
 	if sampleLatency {
 		startedAt = time.Now()
@@ -264,17 +302,30 @@ func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCo
 	if err != nil {
 		*lastStatus = 0
 		invalidateCaptures(step.captures, variables)
-		stats.RecordFailureSampled(latency, step.requestBytes, sampleLatency, ClassifyFailure(err))
+		failure := ClassifyFailure(err)
+		stats.RecordFailureSampled(latency, step.requestBytes, sampleLatency, failure)
+		if stepStats != nil {
+			stepStats.RecordHTTPFailureSampled(latency, sampleLatency, failure, 0)
+		}
 	} else {
 		*lastStatus = resp.StatusCode()
 		if isSuccessStatus(*lastStatus) {
 			stats.RecordHTTPSuccessSampled(latency, len(resp.Body()), step.requestBytes, sampleLatency, *lastStatus)
+			if stepStats != nil {
+				stepStats.RecordHTTPSuccessSampled(latency, sampleLatency, *lastStatus)
+			}
 		} else {
 			stats.RecordHTTPFailureSampled(latency, step.requestBytes, sampleLatency, FailureOther, *lastStatus)
+			if stepStats != nil {
+				stepStats.RecordHTTPFailureSampled(latency, sampleLatency, FailureOther, *lastStatus)
+			}
 		}
 		if len(step.captures) > 0 {
 			if err := captureVariables(resp.Body(), *lastStatus, step.captures, variables); err != nil {
 				stats.RecordCaptureFailure()
+				if stepStats != nil {
+					stepStats.RecordCaptureFailure()
+				}
 			}
 		}
 	}

@@ -3,7 +3,7 @@ import { Activity, AlertTriangle, CheckCircle2, Download, Gauge, ListChecks, Min
 import { downloadRunReport, type BaselineComparison, type QualityGateResult } from "../report";
 import { useMetricsStore } from "../store";
 import type { MetricHistoryPoint } from "../metricHistory";
-import type { MetricsBatch, StatusCodeCount } from "../types";
+import type { MetricsBatch, RequestStepMetrics, StatusCodeCount } from "../types";
 import { formatBytes, formatNumber } from "../format";
 
 export const MetricGrid = memo(function MetricGrid() {
@@ -157,7 +157,7 @@ const MetricDetail = memo(function MetricDetail({
   );
 });
 
-const StatusDetailsDialog = memo(function StatusDetailsDialog({
+export const StatusDetailsDialog = memo(function StatusDetailsDialog({
   batch,
   onClose,
 }: {
@@ -165,6 +165,7 @@ const StatusDetailsDialog = memo(function StatusDetailsDialog({
   onClose: () => void;
 }) {
   const statusCodes = batch?.statusCodes ?? [];
+  const stepMetrics = [...(batch?.stepMetrics ?? [])].sort(compareRequestSteps);
   const total = batch?.total ?? 0;
   return (
     <div className="modal-backdrop" role="presentation">
@@ -193,11 +194,55 @@ const StatusDetailsDialog = memo(function StatusDetailsDialog({
             ))}
           </div>
         )}
+        <div className="request-step-section">
+          <div className="request-step-heading">
+            <h3>Request steps</h3>
+            <small>Failures first, then slowest P99</small>
+          </div>
+          {stepMetrics.length === 0 ? (
+            <div className="inspector-note">No request-step metrics yet</div>
+          ) : (
+            <div className="request-step-list">
+              <div className="request-step-row request-step-header">
+                <span>Step</span>
+                <span>Requests</span>
+                <span>Failures</span>
+                <span>P95 / P99</span>
+              </div>
+              {stepMetrics.map((step) => <RequestStepRow key={step.id} step={step} />)}
+            </div>
+          )}
+        </div>
         <button type="button" className="secondary" onClick={onClose}>Close</button>
       </div>
     </div>
   );
 });
+
+const RequestStepRow = memo(function RequestStepRow({ step }: { step: RequestStepMetrics }) {
+  const diagnosticFailures = step.failed + step.assertionsFailed;
+  const failureRate = step.total > 0 ? (step.failed / step.total) * 100 : 0;
+  const statuses = step.statusCodes.map((status) => `${status.code} ${formatNumber(status.count)}`).join(" · ");
+  return (
+    <div className={`request-step-row${diagnosticFailures > 0 ? " request-step-row-failing" : ""}`}>
+      <div>
+        <strong>{step.name || step.id}</strong>
+        <small title={step.id}>{step.id}{statuses ? ` · ${statuses}` : ""}</small>
+      </div>
+      <span>{formatNumber(step.total)}</span>
+      <span title={`${formatNumber(failureRate, 1)}% HTTP failure rate`}>
+        {formatNumber(step.failed)} HTTP · {formatNumber(step.assertionsFailed)} diagnostics
+      </span>
+      <span>{formatNumber(step.runLatency.p95Ms, 2)} / {formatNumber(step.runLatency.p99Ms, 2)} ms</span>
+    </div>
+  );
+});
+
+function compareRequestSteps(left: RequestStepMetrics, right: RequestStepMetrics) {
+  const leftFailures = left.failed + left.assertionsFailed;
+  const rightFailures = right.failed + right.assertionsFailed;
+  return rightFailures - leftFailures || right.runLatency.p99Ms - left.runLatency.p99Ms || left.id.localeCompare(right.id);
+}
 
 const StatusCodeRow = memo(function StatusCodeRow({ item, total }: { item: StatusCodeCount; total: number }) {
   const ratio = total > 0 ? (item.count / total) * 100 : 0;

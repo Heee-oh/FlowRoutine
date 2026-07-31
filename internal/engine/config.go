@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -17,6 +19,9 @@ const (
 	DefaultMaxConnsPerHost   = 10_000
 	DefaultLatencySampleRate = 1
 	MaxRateLimitRPS          = 10_000_000
+	MaxScenarioSteps         = 512
+	MaxScenarioStepIDBytes   = 128
+	MaxScenarioStepNameBytes = 256
 )
 
 type Header struct {
@@ -52,6 +57,8 @@ const (
 )
 
 type ScenarioStep struct {
+	ID             string
+	Name           string
 	Kind           StepKind
 	URL            string
 	Method         string
@@ -114,6 +121,8 @@ const (
 )
 
 type compiledStep struct {
+	id             string
+	name           string
 	kind           compiledStepKind
 	request        compiledRequestStep
 	delay          time.Duration
@@ -121,6 +130,7 @@ type compiledStep struct {
 }
 
 type compiledRequestStep struct {
+	metricsIndex       int
 	clientIndex        int
 	requestURI         []byte
 	requestURITemplate compiledTemplate
@@ -257,12 +267,26 @@ func compileScenarioSteps(cfg Config, defaultMethod string) ([]compiledStep, []c
 			Body:    cfg.Body,
 		}}
 	}
+	if len(steps) > MaxScenarioSteps {
+		return nil, nil, fmt.Errorf("scenario must have at most %d steps", MaxScenarioSteps)
+	}
 
 	clientIndexes := make(map[string]int)
 	availableVariables := make(map[string]VariableScope)
+	stepIDs := make(map[string]struct{}, len(steps))
 	clients := make([]compiledClient, 0, len(steps))
 	compiled := make([]compiledStep, 0, len(steps))
+	requestIndex := 0
 	for index, step := range steps {
+		id, name, err := compileScenarioStepIdentity(step, index)
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, exists := stepIDs[id]; exists {
+			return nil, nil, fmt.Errorf("scenario step %d id %q is duplicated", index+1, id)
+		}
+		stepIDs[id] = struct{}{}
+		nextCompiled := compiledStep{id: id, name: name}
 		switch step.Kind {
 		case "", StepRequest:
 			target, err := parseTarget(step.URL)
@@ -280,6 +304,8 @@ func compileScenarioSteps(cfg Config, defaultMethod string) ([]compiledStep, []c
 			if err != nil {
 				return nil, nil, err
 			}
+			request.metricsIndex = requestIndex
+			requestIndex++
 			for _, name := range request.templateNames {
 				if _, ok := availableVariables[name]; !ok {
 					return nil, nil, fmt.Errorf(
@@ -301,22 +327,69 @@ func compileScenarioSteps(cfg Config, defaultMethod string) ([]compiledStep, []c
 				}
 				availableVariables[capture.name] = capture.scope
 			}
-			compiled = append(compiled, compiledStep{kind: compiledRequest, request: request})
+			nextCompiled.kind = compiledRequest
+			nextCompiled.request = request
 		case StepDelay:
 			if step.Delay < 0 {
 				return nil, nil, fmt.Errorf("delay must be >= 0: %s", step.Delay)
 			}
-			compiled = append(compiled, compiledStep{kind: compiledDelay, delay: step.Delay})
+			nextCompiled.kind = compiledDelay
+			nextCompiled.delay = step.Delay
 		case StepAssertStatus:
 			if step.ExpectedStatus == "" {
 				return nil, nil, errors.New("assert status step requires expected status")
 			}
-			compiled = append(compiled, compiledStep{kind: compiledAssertStatus, expectedStatus: step.ExpectedStatus})
+			nextCompiled.kind = compiledAssertStatus
+			nextCompiled.expectedStatus = step.ExpectedStatus
 		default:
 			return nil, nil, fmt.Errorf("unsupported scenario step kind: %s", step.Kind)
 		}
+		compiled = append(compiled, nextCompiled)
 	}
 	return compiled, clients, nil
+}
+
+func compileScenarioStepIdentity(step ScenarioStep, index int) (string, string, error) {
+	id := strings.TrimSpace(step.ID)
+	if id == "" {
+		id = fmt.Sprintf("step-%d", index+1)
+	}
+	if err := validateScenarioStepText("id", id, MaxScenarioStepIDBytes); err != nil {
+		return "", "", fmt.Errorf("scenario step %d %w", index+1, err)
+	}
+	name := strings.TrimSpace(step.Name)
+	if name == "" {
+		name = id
+	}
+	if err := validateScenarioStepText("name", name, MaxScenarioStepNameBytes); err != nil {
+		return "", "", fmt.Errorf("scenario step %d %w", index+1, err)
+	}
+	return id, name, nil
+}
+
+func validateScenarioStepText(field string, value string, maximum int) error {
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%s must be valid UTF-8", field)
+	}
+	if len(value) > maximum {
+		return fmt.Errorf("%s must be at most %d bytes", field, maximum)
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return fmt.Errorf("%s contains a control character", field)
+		}
+	}
+	return nil
+}
+
+func requestStepDescriptors(steps []compiledStep) []requestStepDescriptor {
+	descriptors := make([]requestStepDescriptor, 0, len(steps))
+	for _, step := range steps {
+		if step.kind == compiledRequest {
+			descriptors = append(descriptors, requestStepDescriptor{id: step.id, name: step.name})
+		}
+	}
+	return descriptors
 }
 
 func compileRequestStep(step ScenarioStep, target *url.URL, defaultMethod string, clientIndex int) (compiledRequestStep, error) {

@@ -127,8 +127,11 @@ export const useMetricsStore = create<MetricsState>((set) => ({
   })),
   pushBatch: (batch) =>
     set((state) => {
-      const cutoff = batch.timestampUnixMs - state.metricWindowMs;
-      const point = metricHistoryPoint(batch);
+      const nextBatch = batch.stepMetrics === undefined && state.latest?.stepMetrics
+        ? { ...batch, stepMetrics: state.latest.stepMetrics }
+        : batch;
+      const cutoff = nextBatch.timestampUnixMs - state.metricWindowMs;
+      const point = metricHistoryPoint(nextBatch);
       state.liveHistory.add(point, cutoff);
       let reportHistory = state.reportHistory;
       let runBatchCount = state.runBatchCount;
@@ -140,16 +143,16 @@ export const useMetricsStore = create<MetricsState>((set) => ({
         );
         reportHistory.add(point);
         runBatchCount += 1;
-        if (!batch.running) {
+        if (!nextBatch.running) {
           completedReport = applyBaselineComparison(buildRunReport(state.activeRequest, {
-            finalBatch: batch,
+            finalBatch: nextBatch,
             timeline: reportHistory.values(),
             batchCount: runBatchCount,
           }), state.activeRequest);
         }
       }
       return {
-        latest: batch,
+        latest: nextBatch,
         points: state.liveHistory.values(cutoff),
         latestReport: completedReport ?? state.latestReport,
         activeRequest: completedReport ? null : state.activeRequest,

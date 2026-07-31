@@ -63,6 +63,34 @@ func TestPreflightAllowsSlowMetricBatches(t *testing.T) {
 	}
 }
 
+func TestPreflightAssignsStableStepIdentityAndEstimatesStepMetrics(t *testing.T) {
+	request := validPreflightRequest()
+	request.Config.ScenarioSteps = []ScenarioStep{
+		{Kind: "request", URL: request.Config.URL},
+		{ID: "pause", Name: "Think time", Kind: "delay", DelayMS: 1},
+		{ID: "request-details", Name: "GET details", Kind: "request", URL: request.Config.URL + "/details"},
+	}
+
+	preflight, err := preflightStartRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := preflight.normalizedConfig.ScenarioSteps
+	if steps[0].ID != "step-1" || steps[0].Name != "step-1" {
+		t.Fatalf("default identity was not normalized: %+v", steps[0])
+	}
+	if steps[2].ID != "request-details" || steps[2].Name != "GET details" {
+		t.Fatalf("explicit identity was not preserved: %+v", steps[2])
+	}
+	engineSteps := preflight.normalizedConfig.toEngineConfig().ScenarioSteps
+	if engineSteps[2].ID != "request-details" || engineSteps[2].Name != "GET details" {
+		t.Fatalf("step identity was not mapped to the engine: %+v", engineSteps[2])
+	}
+	if preflight.Estimate.MemoryBytes == 0 {
+		t.Fatal("expected step metrics in the memory estimate")
+	}
+}
+
 func TestPreflightNormalizesStagedVUProfile(t *testing.T) {
 	request := validPreflightRequest()
 	request.Config.MaxConnsPerHost = 100
@@ -431,6 +459,27 @@ func TestPreflightRejectsConfiguredBounds(t *testing.T) {
 			message: "scenario must have at most",
 		},
 		{
+			name: "duplicate step id",
+			mutate: func(request *StartRequest) {
+				request.Config.ScenarioSteps = []ScenarioStep{
+					{ID: "same", Kind: "request", URL: request.Config.URL},
+					{ID: "same", Kind: "request", URL: request.Config.URL},
+				}
+			},
+			message: "id \"same\" is duplicated",
+		},
+		{
+			name: "step name size",
+			mutate: func(request *StartRequest) {
+				request.Config.ScenarioSteps = []ScenarioStep{{
+					Name: strings.Repeat("a", MaxScenarioStepNameBytes+1),
+					Kind: "request",
+					URL:  request.Config.URL,
+				}}
+			},
+			message: "name must be at most",
+		},
+		{
 			name: "scenario total size",
 			mutate: func(request *StartRequest) {
 				body := strings.Repeat("a", MaxRequestBodyBytes)
@@ -595,7 +644,7 @@ func TestPreflightRejectsConfiguredBounds(t *testing.T) {
 			mutate: func(request *StartRequest) {
 				request.Config.VirtualUsers = 8_000
 			},
-			message: "estimated peak request memory",
+			message: "estimated peak memory",
 		},
 		{
 			name: "estimated connections",
