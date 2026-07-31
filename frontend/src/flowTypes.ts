@@ -13,6 +13,7 @@ export type RuntimeAuthSecret = {
   token?: string;
   cookieValue?: string;
   apiKeyValue?: string;
+  bindings?: Record<string, string>;
 };
 
 export type FlowNodeKind = "request" | "engine" | "assertion" | "delay" | "metrics" | "window";

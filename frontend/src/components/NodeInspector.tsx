@@ -13,6 +13,7 @@ import {
   toNumber,
 } from "../flowModel";
 import { formatSavedAt } from "../format";
+import { collectSecretPlaceholderNames } from "../secretSanitization";
 
 export const NodeInspector = memo(function NodeInspector({
   selectedNode,
@@ -132,7 +133,7 @@ const AuthFields = memo(function AuthFields({
           type="password"
           value={authSecret.token ?? ""}
           placeholder="JWT token"
-          autoComplete="off"
+          autoComplete="new-password"
           onChange={(event) => updateAuthSecret(node.id, { token: event.target.value })}
         />
       ) : null}
@@ -147,7 +148,7 @@ const AuthFields = memo(function AuthFields({
             type="password"
             value={authSecret.cookieValue ?? ""}
             placeholder="Cookie value"
-            autoComplete="off"
+            autoComplete="new-password"
             onChange={(event) => updateAuthSecret(node.id, { cookieValue: event.target.value })}
           />
         </div>
@@ -163,7 +164,7 @@ const AuthFields = memo(function AuthFields({
             type="password"
             value={authSecret.apiKeyValue ?? ""}
             placeholder="API key"
-            autoComplete="off"
+            autoComplete="new-password"
             onChange={(event) => updateAuthSecret(node.id, { apiKeyValue: event.target.value })}
           />
         </div>
@@ -213,6 +214,11 @@ const NodeFields = memo(function NodeFields({
           <Field label="Body">
             <textarea rows={5} value={node.data.body ?? ""} spellCheck={false} onChange={(event) => updateNode({ body: event.target.value })} />
           </Field>
+          <SecretBindingFields
+            node={node}
+            authSecret={authSecret}
+            updateAuthSecret={updateAuthSecret}
+          />
           <Field label="Capture JSON">
             <textarea
               rows={3}
@@ -326,6 +332,57 @@ const NodeFields = memo(function NodeFields({
         </>
       );
   }
+});
+
+const SecretBindingFields = memo(function SecretBindingFields({
+  node,
+  authSecret,
+  updateAuthSecret,
+}: {
+  node: Node<FlowNodeData>;
+  authSecret: RuntimeAuthSecret;
+  updateAuthSecret: (nodeId: string, patch: Partial<RuntimeAuthSecret>) => void;
+}) {
+  const headerValues = headerRowsFromNode(node.data).flatMap((header) => [header.name, header.value]);
+  const names = collectSecretPlaceholderNames([
+    node.data.url,
+    node.data.headersText,
+    node.data.body,
+    ...headerValues,
+  ]);
+  if (names.length === 0) {
+    return null;
+  }
+  const bindings = authSecret.bindings ?? {};
+  const updateBinding = (name: string, value: string) => {
+    const next = { ...bindings };
+    if (value) {
+      next[name] = value;
+    } else {
+      delete next[name];
+    }
+    updateAuthSecret(node.id, { bindings: next });
+  };
+  return (
+    <div className="field">
+      <span className="field-label">Runtime secrets</span>
+      {names.map((name) => (
+        <label key={name} className="field-stack">
+          <span>{name.replace(/^SECRET_/, "")}</span>
+          <input
+            type="password"
+            value={bindings[name] ?? ""}
+            placeholder={name}
+            autoComplete="new-password"
+            onChange={(event) => updateBinding(name, event.target.value)}
+          />
+        </label>
+      ))}
+      <div className="inspector-note">
+        Placeholder values stay in memory only and are required before running.
+      </div>
+    </div>
+  );
 });
 
 const HeaderFields = memo(function HeaderFields({

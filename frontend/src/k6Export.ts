@@ -1,4 +1,9 @@
 import type { Header, QualityGate, ScenarioStep, StartRequest } from "./types";
+import {
+  sanitizeHeaderRows,
+  sanitizeSensitiveURL,
+  sanitizeStructuredBody,
+} from "./secretSanitization";
 
 export function downloadK6Script(request: StartRequest) {
   const blob = new Blob([buildK6Script(request)], { type: "text/javascript" });
@@ -12,7 +17,6 @@ export function downloadK6Script(request: StartRequest) {
 
 export function buildK6Script(request: StartRequest) {
   const steps = scenarioSteps(request);
-  const usesEnv = steps.some((step) => step.kind === "request" && (step.headers ?? []).some((header) => isSensitiveHeader(header.name)));
   const lines = [
     "import http from \"k6/http\";",
     "import { check, sleep } from \"k6\";",
@@ -25,12 +29,9 @@ export function buildK6Script(request: StartRequest) {
     "",
   ];
 
-  if (usesEnv) {
-    lines.push("const env = (name, fallback = \"\") => __ENV[name] || fallback;", "");
-  }
   lines.push(
     "const vars = {};",
-    "const render = (value) => value.replace(/\\{\\{([^}]+)\\}\\}/g, (_match, name) => vars[name] || \"\");",
+    "const render = (value) => value.replace(/\\{\\{([^}]+)\\}\\}/g, (_match, name) => vars[name] ?? __ENV[name] ?? \"\");",
     "const capture = (name, path, response) => {",
     "  const value = path.split(\".\").reduce((current, segment) => current == null ? undefined : current[segment], response.json());",
     "  if (value !== undefined && value !== null) vars[name] = String(value);",
@@ -80,15 +81,27 @@ function renderThresholds(gate: QualityGate | undefined) {
 
 function scenarioSteps(request: StartRequest): ScenarioStep[] {
   if (request.config.scenarioSteps.length > 0) {
-    return request.config.scenarioSteps;
+    return request.config.scenarioSteps.map(sanitizeScenarioStep);
   }
-  return [{
+  return [sanitizeScenarioStep({
     kind: "request",
     url: request.config.url,
     method: request.config.method,
     headers: request.config.headers,
     body: request.config.body,
-  }];
+  })];
+}
+
+function sanitizeScenarioStep(step: ScenarioStep): ScenarioStep {
+  if (step.kind !== "request") {
+    return step;
+  }
+  return {
+    ...step,
+    url: sanitizeSensitiveURL(step.url ?? ""),
+    headers: sanitizeHeaderRows(step.headers ?? []),
+    body: sanitizeStructuredBody(step.body ?? ""),
+  };
 }
 
 function renderStep(step: ScenarioStep) {
@@ -122,10 +135,7 @@ function renderHeaders(headers: Header[], baseIndent: string) {
     return "{}";
   }
   const entries = activeHeaders.map((header) => {
-    const value = isSensitiveHeader(header.name)
-      ? `env(${JSON.stringify(envNameForHeader(header.name))})`
-      : `render(${JSON.stringify(header.value)})`;
-    return `${baseIndent}  ${JSON.stringify(header.name)}: ${value},`;
+    return `${baseIndent}  ${JSON.stringify(header.name)}: render(${JSON.stringify(header.value)}),`;
   });
   return `{\n${entries.join("\n")}\n${baseIndent}}`;
 }
@@ -176,15 +186,6 @@ function integerOption(value: number, fallback: number) {
 
 function nonNegative(value: number | undefined, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallback;
-}
-
-function isSensitiveHeader(name: string) {
-  return /authorization|cookie|token|secret|api[-_]?key/i.test(name);
-}
-
-function envNameForHeader(name: string) {
-  const normalized = name.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toUpperCase();
-  return normalized || "SECRET_HEADER";
 }
 
 function k6Filename(rawURL: string) {
