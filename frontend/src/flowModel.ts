@@ -1,7 +1,7 @@
 import type { Edge, Node } from "@xyflow/react";
 import { DEFAULT_METRIC_WINDOW_MS } from "./store";
 import { formatDuration } from "./format";
-import type { Header, LoadConfig, OpenAPIEndpoint, ScenarioStep, StartRequest } from "./types";
+import type { Capture, Header, LoadConfig, OpenAPIEndpoint, ScenarioStep, StartRequest } from "./types";
 import type {
   FlowNodeData,
   FlowNodeKind,
@@ -315,6 +315,7 @@ function nodeTemplate(kind: FlowNodeKind, settings: Partial<FlowNodeData> | null
         authCookieName: "session",
         authApiKeyName: "X-Api-Key",
         body: settings?.body ?? "",
+        capturesText: settings?.capturesText ?? "",
       };
     case "engine":
       return {
@@ -499,6 +500,7 @@ function nodeToScenarioStep(node: Node<FlowNodeData>, authSecrets: Record<string
         method: stringValue(node.data.method, "GET"),
         headers: parseHeaderText(headerTextFromNode(node.data, authSecrets[node.id])),
         body: stringValue(node.data.body, ""),
+        captures: parseCaptureText(stringValue(node.data.capturesText, "")),
       };
     case "delay":
       return {
@@ -538,6 +540,24 @@ function authHeaderRowsFromNode(data: FlowNodeData, authSecret?: RuntimeAuthSecr
     default:
       return [];
   }
+}
+
+function parseCaptureText(raw: string): Capture[] {
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const splitAt = line.indexOf("=");
+      if (splitAt < 1) {
+        throw new Error(`Invalid capture: ${line}`);
+      }
+      return {
+        name: line.slice(0, splitAt).trim(),
+        path: line.slice(splitAt + 1).trim(),
+      };
+    })
+    .filter((capture) => capture.name && capture.path);
 }
 
 function parseHeaderRows(raw: string): HeaderRow[] {

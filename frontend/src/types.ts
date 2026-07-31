@@ -27,8 +27,14 @@ export type ScenarioStep = {
   method?: string;
   headers?: Header[];
   body?: string;
+  captures?: Capture[];
   delayMs?: number;
   expectedStatus?: string;
+};
+
+export type Capture = {
+  name: string;
+  path: string;
 };
 
 export type StartRequest = {

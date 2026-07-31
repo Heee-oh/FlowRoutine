@@ -25,8 +25,9 @@ func BenchmarkAcquireReleaseRequest(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
+	variables := map[string]string{}
 	for i := 0; i < b.N; i++ {
-		req := engine.acquireRequest(engine.cfg.steps[0].request)
+		req := engine.acquireRequest(engine.cfg.steps[0].request, variables)
 		engine.releaseRequest(req)
 	}
 }
@@ -71,8 +72,9 @@ func BenchmarkFasthttpClientLoopback(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
+	variables := map[string]string{}
 	for i := 0; i < b.N; i++ {
-		req := engine.acquireRequest(engine.cfg.steps[0].request)
+		req := engine.acquireRequest(engine.cfg.steps[0].request, variables)
 		resp := engine.acquireResponse()
 		err := engine.client.DoTimeout(req, resp, time.Second)
 		if err != nil {
@@ -122,8 +124,9 @@ func benchmarkFasthttpClientLoopbackParallel(b *testing.B, measureLatency bool) 
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
+		variables := map[string]string{}
 		for pb.Next() {
-			req := engine.acquireRequest(engine.cfg.steps[0].request)
+			req := engine.acquireRequest(engine.cfg.steps[0].request, variables)
 			resp := engine.acquireResponse()
 			startedAt := time.Time{}
 			if measureLatency {

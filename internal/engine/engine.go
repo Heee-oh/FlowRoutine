@@ -2,7 +2,11 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -125,6 +129,7 @@ func (e *Engine) worker(ctx context.Context, index int) {
 
 	stats := e.stats.Shard(index)
 	sampleCountdown := e.cfg.latencySampleRate
+	variables := make(map[string]string)
 	for {
 		select {
 		case <-ctx.Done():
@@ -133,7 +138,7 @@ func (e *Engine) worker(ctx context.Context, index int) {
 		}
 		var lastStatus int
 		for i := range e.cfg.steps {
-			if !e.runStep(ctx, stats, &sampleCountdown, &lastStatus, &e.cfg.steps[i]) {
+			if !e.runStep(ctx, stats, &sampleCountdown, &lastStatus, &e.cfg.steps[i], variables) {
 				return
 			}
 		}
@@ -154,7 +159,7 @@ func newHostClient(cfg compiledConfig, client compiledClient) *fasthttp.HostClie
 	}
 }
 
-func (e *Engine) runStep(ctx context.Context, stats *statsShard, sampleCountdown *int, lastStatus *int, step *compiledStep) bool {
+func (e *Engine) runStep(ctx context.Context, stats *statsShard, sampleCountdown *int, lastStatus *int, step *compiledStep, variables map[string]string) bool {
 	switch step.kind {
 	case compiledDelay:
 		return sleepContext(ctx, step.delay)
@@ -164,18 +169,18 @@ func (e *Engine) runStep(ctx context.Context, stats *statsShard, sampleCountdown
 		}
 		return true
 	case compiledRequest:
-		return e.runRequestStep(ctx, stats, sampleCountdown, lastStatus, step.request)
+		return e.runRequestStep(ctx, stats, sampleCountdown, lastStatus, step.request, variables)
 	default:
 		return true
 	}
 }
 
-func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCountdown *int, lastStatus *int, step compiledRequestStep) bool {
+func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCountdown *int, lastStatus *int, step compiledRequestStep, variables map[string]string) bool {
 	if e.limiter != nil && !e.limiter.Wait(ctx) {
 		return false
 	}
 
-	req := e.acquireRequest(step)
+	req := e.acquireRequest(step, variables)
 	resp := e.acquireResponse()
 	sampleLatency := false
 	if *sampleCountdown <= 1 {
@@ -203,6 +208,11 @@ func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCo
 			stats.RecordHTTPSuccessSampled(latency, len(resp.Body()), step.requestBytes, sampleLatency, *lastStatus)
 		} else {
 			stats.RecordHTTPFailureSampled(latency, step.requestBytes, sampleLatency, FailureOther, *lastStatus)
+		}
+		if len(step.captures) > 0 {
+			if err := captureVariables(resp.Body(), step.captures, variables); err != nil {
+				stats.RecordAssertionFailure()
+			}
 		}
 	}
 
@@ -261,19 +271,94 @@ func (e *Engine) waitForRampUp(ctx context.Context, index int) bool {
 	}
 }
 
-func (e *Engine) acquireRequest(step compiledRequestStep) *fasthttp.Request {
+func (e *Engine) acquireRequest(step compiledRequestStep, variables map[string]string) *fasthttp.Request {
 	req := e.reqPool.Get().(*fasthttp.Request)
 	req.Reset()
-	req.SetRequestURIBytes(step.requestURI)
+	if step.requestURITemplated {
+		req.SetRequestURIBytes(applyTemplateBytes(step.requestURI, variables))
+	} else {
+		req.SetRequestURIBytes(step.requestURI)
+	}
 	req.Header.SetHostBytes(step.hostHeader)
 	req.Header.SetMethodBytes(step.method)
 	for i := range step.headers {
-		req.Header.SetBytesKV(step.headers[i].name, step.headers[i].value)
+		if step.headers[i].templated {
+			req.Header.SetBytesKV(step.headers[i].name, applyTemplateBytes(step.headers[i].value, variables))
+		} else {
+			req.Header.SetBytesKV(step.headers[i].name, step.headers[i].value)
+		}
 	}
 	if len(step.body) > 0 {
-		req.SetBodyRaw(step.body)
+		if step.bodyTemplated {
+			req.SetBodyRaw(applyTemplateBytes(step.body, variables))
+		} else {
+			req.SetBodyRaw(step.body)
+		}
 	}
 	return req
+}
+
+func applyTemplateBytes(value []byte, variables map[string]string) []byte {
+	rendered := string(value)
+	for name, variableValue := range variables {
+		rendered = strings.ReplaceAll(rendered, "{{"+name+"}}", variableValue)
+	}
+	return []byte(rendered)
+}
+
+func captureVariables(body []byte, captures []compiledVariableCapture, variables map[string]string) error {
+	var document any
+	if err := json.Unmarshal(body, &document); err != nil {
+		return err
+	}
+	for _, capture := range captures {
+		value, ok := jsonPathValue(document, capture.path)
+		if !ok {
+			return fmt.Errorf("capture path not found: %s", strings.Join(capture.path, "."))
+		}
+		variables[capture.name] = stringifyCaptureValue(value)
+	}
+	return nil
+}
+
+func jsonPathValue(value any, path []string) (any, bool) {
+	current := value
+	for _, segment := range path {
+		switch typed := current.(type) {
+		case map[string]any:
+			next, ok := typed[segment]
+			if !ok {
+				return nil, false
+			}
+			current = next
+		case []any:
+			index, err := strconv.Atoi(segment)
+			if err != nil || index < 0 || index >= len(typed) {
+				return nil, false
+			}
+			current = typed[index]
+		default:
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func stringifyCaptureValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case float64, bool:
+		return fmt.Sprint(typed)
+	case nil:
+		return ""
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprint(typed)
+		}
+		return string(encoded)
+	}
 }
 
 func (e *Engine) releaseRequest(req *fasthttp.Request) {

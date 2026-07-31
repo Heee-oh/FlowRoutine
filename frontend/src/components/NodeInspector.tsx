@@ -213,6 +213,18 @@ const NodeFields = memo(function NodeFields({
           <Field label="Body">
             <textarea rows={5} value={node.data.body ?? ""} spellCheck={false} onChange={(event) => updateNode({ body: event.target.value })} />
           </Field>
+          <Field label="Capture JSON">
+            <textarea
+              rows={3}
+              value={node.data.capturesText ?? ""}
+              spellCheck={false}
+              placeholder="token=data.accessToken"
+              onChange={(event) => updateNode({ capturesText: event.target.value })}
+            />
+            <div className="inspector-note">
+              Captured values can be reused as {"{{token}}"} in later URLs, headers, or bodies.
+            </div>
+          </Field>
         </>
       );
     case "engine":

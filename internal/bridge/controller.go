@@ -35,13 +35,19 @@ type Header struct {
 }
 
 type ScenarioStep struct {
-	Kind           string   `json:"kind"`
-	URL            string   `json:"url"`
-	Method         string   `json:"method"`
-	Headers        []Header `json:"headers"`
-	Body           string   `json:"body"`
-	DelayMS        int64    `json:"delayMs"`
-	ExpectedStatus string   `json:"expectedStatus"`
+	Kind           string    `json:"kind"`
+	URL            string    `json:"url"`
+	Method         string    `json:"method"`
+	Headers        []Header  `json:"headers"`
+	Body           string    `json:"body"`
+	DelayMS        int64     `json:"delayMs"`
+	ExpectedStatus string    `json:"expectedStatus"`
+	Captures       []Capture `json:"captures"`
+}
+
+type Capture struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
 }
 
 type LoadConfig struct {
@@ -225,6 +231,10 @@ func (c LoadConfig) toEngineConfig() engine.Config {
 		for _, h := range step.Headers {
 			stepHeaders = append(stepHeaders, engine.Header{Name: h.Name, Value: h.Value})
 		}
+		captures := make([]engine.VariableCapture, 0, len(step.Captures))
+		for _, capture := range step.Captures {
+			captures = append(captures, engine.VariableCapture{Name: capture.Name, Path: capture.Path})
+		}
 		steps = append(steps, engine.ScenarioStep{
 			Kind:           engine.StepKind(step.Kind),
 			URL:            step.URL,
@@ -233,6 +243,7 @@ func (c LoadConfig) toEngineConfig() engine.Config {
 			Body:           []byte(step.Body),
 			Delay:          time.Duration(step.DelayMS) * time.Millisecond,
 			ExpectedStatus: step.ExpectedStatus,
+			Captures:       captures,
 		})
 	}
 

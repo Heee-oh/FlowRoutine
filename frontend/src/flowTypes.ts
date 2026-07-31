@@ -32,6 +32,7 @@ export type FlowNodeData = {
   authCookieName?: string;
   authApiKeyName?: string;
   body?: string;
+  capturesText?: string;
   virtualUsers?: number;
   durationMs?: number;
   requestTimeoutMs?: number;

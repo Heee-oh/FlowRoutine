@@ -198,6 +198,78 @@ func TestEngineRunsScenarioStepsAndRecordsAssertionFailures(t *testing.T) {
 	}
 }
 
+func TestEngineCapturesJSONVariablesForLaterSteps(t *testing.T) {
+	ln := fasthttputil.NewInmemoryListener()
+	defer ln.Close()
+
+	var authorized atomic.Uint64
+	server := &fasthttp.Server{
+		Handler: func(ctx *fasthttp.RequestCtx) {
+			switch string(ctx.Path()) {
+			case "/login":
+				ctx.SetStatusCode(fasthttp.StatusOK)
+				ctx.Response.SetBodyRaw([]byte(`{"data":{"token":"abc123"}}`))
+			case "/secure":
+				if string(ctx.Request.Header.Peek("Authorization")) == "Bearer abc123" {
+					authorized.Add(1)
+					ctx.SetStatusCode(fasthttp.StatusOK)
+					ctx.Response.SetBodyRaw([]byte("ok"))
+					return
+				}
+				ctx.SetStatusCode(fasthttp.StatusUnauthorized)
+			default:
+				ctx.SetStatusCode(fasthttp.StatusNotFound)
+			}
+		},
+	}
+	go func() {
+		_ = server.Serve(ln)
+	}()
+	defer server.Shutdown()
+
+	engine, err := New(Config{
+		URL:             "http://unused/login",
+		VirtualUsers:    1,
+		Duration:        30 * time.Millisecond,
+		RequestTimeout:  time.Second,
+		MaxConnsPerHost: DefaultMaxConnsPerHost,
+		RateLimitRPS:    100,
+		ScenarioSteps: []ScenarioStep{
+			{
+				Kind:     StepRequest,
+				URL:      "http://unused/login",
+				Captures: []VariableCapture{{Name: "token", Path: "data.token"}},
+			},
+			{
+				Kind: StepRequest,
+				URL:  "http://unused/secure",
+				Headers: []Header{{
+					Name:  "Authorization",
+					Value: "Bearer {{token}}",
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.client.Dial = func(addr string) (net.Conn, error) {
+		return ln.Dial()
+	}
+
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-engine.Done()
+
+	if authorized.Load() == 0 {
+		t.Fatal("expected captured token to authorize a later request")
+	}
+	if snapshot := engine.Snapshot(); snapshot.AssertionFailures != 0 {
+		t.Fatalf("expected no capture assertion failures, got %+v", snapshot)
+	}
+}
+
 func TestEngineCountsHTTPErrorStatusAsFailure(t *testing.T) {
 	ln := fasthttputil.NewInmemoryListener()
 	defer ln.Close()
