@@ -63,6 +63,9 @@ describe("secret sanitization", () => {
     expect(sanitizeSensitiveURL("/callback#access_token=fragment-secret")).toBe(
       "/callback#access_token={{SECRET_ACCESS_TOKEN}}",
     );
+    expect(sanitizeSensitiveURL("https://example.com/items/{{token}}?cursor={{nextPage}}")).toBe(
+      "https://example.com/items/{{token}}?cursor={{nextPage}}",
+    );
   });
 
   it("sanitizes nested JSON, form bodies, and signed URL values", () => {

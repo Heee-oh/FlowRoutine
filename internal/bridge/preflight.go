@@ -250,6 +250,9 @@ func normalizeLoadConfig(config LoadConfig) (LoadConfig, error) {
 	if err != nil {
 		return LoadConfig{}, err
 	}
+	if err := engine.ValidateConfig(next.toEngineConfig()); err != nil {
+		return LoadConfig{}, fmt.Errorf("scenario configuration: %w", err)
+	}
 	return next, nil
 }
 
@@ -369,8 +372,16 @@ func normalizeCaptures(scope string, captures []Capture) ([]Capture, error) {
 	normalized := make([]Capture, 0, len(captures))
 	for index, capture := range captures {
 		next := Capture{
-			Name: strings.TrimSpace(capture.Name),
-			Path: strings.TrimSpace(capture.Path),
+			Name:     strings.TrimSpace(capture.Name),
+			Path:     strings.TrimSpace(capture.Path),
+			Scope:    strings.ToLower(strings.TrimSpace(capture.Scope)),
+			OnStatus: strings.ToLower(strings.TrimSpace(capture.OnStatus)),
+		}
+		if next.Scope == "" {
+			next.Scope = string(engine.VariableScopeIteration)
+		}
+		if next.OnStatus == "" {
+			next.OnStatus = engine.CaptureStatusSuccess
 		}
 		if next.Name == "" || next.Path == "" {
 			return nil, fmt.Errorf("%s capture %d name and path are required", scope, index+1)
@@ -392,7 +403,7 @@ func scenarioStepBytes(step ScenarioStep) int {
 		total += len(header.Name) + len(header.Value) + 4
 	}
 	for _, capture := range step.Captures {
-		total += len(capture.Name) + len(capture.Path)
+		total += len(capture.Name) + len(capture.Path) + len(capture.Scope) + len(capture.OnStatus)
 	}
 	return total
 }
@@ -468,7 +479,7 @@ func estimateResources(config LoadConfig) (PreflightEstimate, error) {
 		for _, step := range config.ScenarioSteps {
 			sharedBytes += len(step.Kind) + len(step.URL) + len(step.Method) + len(step.Body) + len(step.ExpectedStatus)
 			for _, capture := range step.Captures {
-				sharedBytes += len(capture.Name) + len(capture.Path)
+				sharedBytes += len(capture.Name) + len(capture.Path) + len(capture.Scope) + len(capture.OnStatus)
 			}
 			_, headerBytes, _ := normalizeHeaders("scenario headers", step.Headers)
 			sharedBytes += headerBytes

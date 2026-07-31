@@ -35,6 +35,8 @@ export type ScenarioStep = {
 export type Capture = {
   name: string;
   path: string;
+  scope?: "iteration" | "run";
+  onStatus?: string;
 };
 
 export type StartRequest = {
@@ -101,6 +103,8 @@ export type MetricsBatch = {
   connRefused: number;
   otherErrors: number;
   assertionsFailed: number;
+  captureFailures: number;
+  templateFailures: number;
   intervalLatency: IntervalLatencyMetrics;
   runLatency: CumulativeLatencyMetrics;
   bytesRead: number;

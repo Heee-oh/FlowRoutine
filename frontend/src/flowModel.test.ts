@@ -7,6 +7,7 @@ import {
   initialFlowEdges,
   initialFlowNodes,
   loadSavedScenarios,
+  parseCaptureText,
 } from "./flowModel";
 import type { FlowNodeData, SavedScenario } from "./flowTypes";
 import type { LoadConfig, PreflightResponse, StartRequest } from "./types";
@@ -160,6 +161,22 @@ describe("scenario secret handling", () => {
     expect(() => buildStartRequestFromGraph(nodes, initialFlowEdges, createRequest(), {})).toThrow(
       "Runtime secret SECRET_ACCESS_TOKEN is required",
     );
+  });
+});
+
+describe("parseCaptureText", () => {
+  it("makes capture scope and response-status policy explicit", () => {
+    expect(parseCaptureText([
+      "token=data.token",
+      "session@run:2xx=$.sessions[0].id",
+      "error:401=error.code",
+    ].join("\n"))).toEqual([
+      { name: "token", path: "data.token", scope: "iteration", onStatus: "success" },
+      { name: "session", path: "$.sessions[0].id", scope: "run", onStatus: "2xx" },
+      { name: "error", path: "error.code", scope: "iteration", onStatus: "401" },
+    ]);
+    expect(() => parseCaptureText("token@global=data.token")).toThrow("Invalid capture scope");
+    expect(() => parseCaptureText("token=$..data.token")).toThrow("Invalid capture path");
   });
 });
 

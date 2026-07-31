@@ -54,6 +54,8 @@ type statsShard struct {
 	connRefused       atomic.Uint64
 	otherFailures     atomic.Uint64
 	assertionFailures atomic.Uint64
+	captureFailures   atomic.Uint64
+	templateFailures  atomic.Uint64
 	latencySamples    atomic.Uint64
 	totalLatencyNano  atomic.Uint64
 	minLatencyNano    atomic.Uint64
@@ -77,6 +79,8 @@ type Snapshot struct {
 	ConnRefused       uint64
 	OtherFailures     uint64
 	AssertionFailures uint64
+	CaptureFailures   uint64
+	TemplateFailures  uint64
 	LatencySamples    uint64
 	TotalLatencyNano  uint64
 	MinLatencyNano    uint64
@@ -168,6 +172,8 @@ func (s *AtomicStats) Snapshot(now time.Time) Snapshot {
 		snapshot.ConnRefused += shard.connRefused.Load()
 		snapshot.OtherFailures += shard.otherFailures.Load()
 		snapshot.AssertionFailures += shard.assertionFailures.Load()
+		snapshot.CaptureFailures += shard.captureFailures.Load()
+		snapshot.TemplateFailures += shard.templateFailures.Load()
 		snapshot.LatencySamples += shard.latencySamples.Load()
 		snapshot.TotalLatencyNano += shard.totalLatencyNano.Load()
 		snapshot.BytesRead += shard.bytesRead.Load()
@@ -226,6 +232,8 @@ func (s *statsShard) reset() {
 	s.connRefused.Store(0)
 	s.otherFailures.Store(0)
 	s.assertionFailures.Store(0)
+	s.captureFailures.Store(0)
+	s.templateFailures.Store(0)
 	s.latencySamples.Store(0)
 	s.totalLatencyNano.Store(0)
 	s.minLatencyNano.Store(math.MaxUint64)
@@ -325,6 +333,16 @@ func (s *statsShard) recordFailureKind(failure FailureKind) {
 
 func (s *statsShard) RecordAssertionFailure() {
 	s.assertionFailures.Add(1)
+}
+
+func (s *statsShard) RecordCaptureFailure() {
+	s.captureFailures.Add(1)
+	s.RecordAssertionFailure()
+}
+
+func (s *statsShard) RecordTemplateFailure() {
+	s.templateFailures.Add(1)
+	s.RecordAssertionFailure()
 }
 
 func latencyBucketIndex(latencyNano uint64) int {

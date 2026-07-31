@@ -49,6 +49,8 @@ describe("buildRunReport", () => {
       connRefused: 0,
       otherErrors: 0,
       assertionsFailed: 0,
+      captureFailures: 0,
+      templateFailures: 0,
       intervalLatency: {
         samples: 10,
         avgMs: 1,
@@ -100,6 +102,12 @@ describe("buildRunReport", () => {
       method: "GET",
       url: "https://example.com/items?X-Amz-Signature=report-step-secret",
       headers: [{ name: "X-API-Key", value: "report-api-secret" }],
+      captures: [{
+        name: "token",
+        path: "$.items[0].token",
+        scope: "run",
+        onStatus: "2xx",
+      }],
     }];
 
     const report = buildRunReport(request, []);
@@ -108,11 +116,17 @@ describe("buildRunReport", () => {
     otherSecrets.config.url = "https://bob:other@example.com/items?access_token=different";
     otherSecrets.config.scenarioSteps[0].url = "https://example.com/items?X-Amz-Signature=different";
 
-    expect(report.schemaVersion).toBe(3);
+    expect(report.schemaVersion).toBe(4);
     expect(serialized).not.toMatch(/alice|password|report-(?:url|auth|step|api)-secret/);
     expect(report.run.targetUrl).toContain("REDACTED");
     expect(report.config.headers[0].value).toBe("[redacted]");
     expect(report.config.scenarioSteps[0].url).toContain("REDACTED");
+    expect(report.config.scenarioSteps[0].captures).toEqual([{
+      name: "token",
+      path: "$.items[0].token",
+      scope: "run",
+      onStatus: "2xx",
+    }]);
     expect(buildRunReport(otherSecrets, []).baseline.key).toBe(report.baseline.key);
   });
 

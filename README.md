@@ -61,6 +61,10 @@ go build ./...
 | Interop | k6 JavaScript export with thresholds and sensitive headers mapped to environment variables |
 | UI | Node help, Korean/English descriptions, adjustable chart window, wheel zoom, edge deletion |
 
+Capture syntax is `name[@iteration|run][:success|any|2xx|200]=JSON.path`. Iteration values reset on every
+virtual-user loop; run values keep the first successful value for that virtual user. JSON paths support
+dot segments and array indexes such as `$.items[0].token`. A missing value never sends an unresolved template.
+
 ## Architecture
 
 ```text

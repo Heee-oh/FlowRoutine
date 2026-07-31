@@ -1,4 +1,5 @@
 import type { Edge, Node } from "@xyflow/react";
+import { normalizeCaptureDefinition, normalizeCaptureScope } from "./captureValidation";
 import { DEFAULT_METRIC_WINDOW_MS } from "./store";
 import { formatDuration } from "./format";
 import {
@@ -620,7 +621,7 @@ function authHeaderRowsFromNode(data: FlowNodeData, authSecret?: RuntimeAuthSecr
   }
 }
 
-function parseCaptureText(raw: string): Capture[] {
+export function parseCaptureText(raw: string): Capture[] {
   return raw
     .split("\n")
     .map((line) => line.trim())
@@ -630,10 +631,35 @@ function parseCaptureText(raw: string): Capture[] {
       if (splitAt < 1) {
         throw new Error(`Invalid capture: ${line}`);
       }
-      return {
-        name: line.slice(0, splitAt).trim(),
-        path: line.slice(splitAt + 1).trim(),
-      };
+      const descriptor = line.slice(0, splitAt).trim();
+      const path = line.slice(splitAt + 1).trim();
+      let nameAndScope = descriptor;
+      let onStatus = "success";
+      const statusAt = descriptor.lastIndexOf(":");
+      if (statusAt >= 0) {
+        nameAndScope = descriptor.slice(0, statusAt).trim();
+        onStatus = descriptor.slice(statusAt + 1).trim().toLowerCase();
+      }
+      let name = nameAndScope;
+      let scope: Capture["scope"] = "iteration";
+      const scopeAt = nameAndScope.lastIndexOf("@");
+      if (scopeAt >= 0) {
+        name = nameAndScope.slice(0, scopeAt).trim();
+        const rawScope = nameAndScope.slice(scopeAt + 1).trim().toLowerCase();
+        if (!rawScope) {
+          throw new Error("Invalid capture scope: (empty)");
+        }
+        scope = normalizeCaptureScope(rawScope);
+      }
+      if (!name || !path || !onStatus) {
+        throw new Error(`Invalid capture: ${line}`);
+      }
+      return normalizeCaptureDefinition({
+        name,
+        path,
+        scope,
+        onStatus,
+      });
     })
     .filter((capture) => capture.name && capture.path);
 }

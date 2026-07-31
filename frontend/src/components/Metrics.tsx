@@ -28,7 +28,11 @@ export const MetricGrid = memo(function MetricGrid() {
         <MetricDetail label="TLS" value={formatNumber(latest?.tls ?? 0)} />
         <MetricDetail label="Refused" value={formatNumber(latest?.connRefused ?? 0)} />
         <MetricDetail label="Other" value={formatNumber(latest?.otherErrors ?? 0)} />
-        <MetricDetail label="Assertions" value={formatNumber(latest?.assertionsFailed ?? 0)} />
+        <MetricDetail
+          label="Assertions"
+          value={formatNumber(latest?.assertionsFailed ?? 0)}
+          title={`Capture ${formatNumber(latest?.captureFailures ?? 0)} · Template ${formatNumber(latest?.templateFailures ?? 0)}`}
+        />
         <MetricDetail label="Read" value={formatBytes(latest?.bytesRead ?? 0)} />
       </div>
       <div className="metrics-footer">
@@ -125,9 +129,17 @@ const Metric = memo(function Metric({ icon, label, value }: { icon: ReactNode; l
   );
 });
 
-const MetricDetail = memo(function MetricDetail({ label, value }: { label: string; value: string }) {
+const MetricDetail = memo(function MetricDetail({
+  label,
+  value,
+  title,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+}) {
   return (
-    <div className="metric-detail">
+    <div className="metric-detail" title={title}>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
