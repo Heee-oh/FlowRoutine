@@ -8,7 +8,7 @@ import {
   useEdgesState,
   useNodesState,
 } from "@xyflow/react";
-import { HelpCircle, Play, Square, Workflow } from "lucide-react";
+import { FileCode, HelpCircle, Play, Square, Workflow } from "lucide-react";
 import { FlowCanvas } from "./components/FlowCanvas";
 import { HelpDialog, OpenAPIImportDialog, StartConfirmDialog } from "./components/Dialogs";
 import { MetricGrid, MetricsChart } from "./components/Metrics";
@@ -32,6 +32,7 @@ import {
 import type { FlowNodeData, FlowNodeKind, RuntimeAuthSecret, SafetyAssessment, SavedScenario } from "./flowTypes";
 import { parseHarArchive } from "./harImport";
 import type { HelpLanguage, HelpTopic } from "./help";
+import { downloadK6Script } from "./k6Export";
 import { parsePostmanCollection } from "./postmanImport";
 import { DEFAULT_METRIC_WINDOW_MS, useLoadStore, useMetricsStore } from "./store";
 import type { OpenAPIEndpoint, OpenAPIImportResponse, StartRequest } from "./types";
@@ -226,6 +227,16 @@ export function App() {
     }
   }, [setError, setRunning, setStopping, stopping]);
 
+  const handleExportK6 = useCallback(() => {
+    try {
+      setError("");
+      const request = buildStartRequestFromGraph(flowNodes, flowEdges, buildStartRequest(), authSecrets);
+      downloadK6Script(request);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to export k6 script");
+    }
+  }, [authSecrets, buildStartRequest, flowEdges, flowNodes, setError]);
+
   const handleConfirmStart = useCallback(() => {
     if (!pendingStart) {
       return;
@@ -399,6 +410,16 @@ export function App() {
             <h2>HTTP target stress flow</h2>
           </div>
           <div className="toolbar-actions">
+            <button
+              type="button"
+              className="secondary icon-button"
+              aria-label="Export k6 script"
+              title="Export k6 script"
+              disabled={running || stopping}
+              onClick={handleExportK6}
+            >
+              <FileCode size={17} />
+            </button>
             <button type="button" className="secondary icon-button" aria-label="Open help" title="Help" onClick={() => setHelpTopic("overview")}>
               <HelpCircle size={17} />
             </button>
