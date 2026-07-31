@@ -92,77 +92,150 @@ type SnapshotResponse struct {
 	StatusCodes       []StatusCodeCount `json:"statusCodes"`
 }
 
+type controllerState uint8
+
+const (
+	controllerIdle controllerState = iota
+	controllerStarting
+	controllerRunning
+	controllerStopping
+)
+
+type engineFactory func(engine.Config) (*engine.Engine, error)
+type batcherFactory func(*engine.Engine, Emitter, time.Duration) *Batcher
+
 type Controller struct {
 	emitter Emitter
 
-	mu      sync.Mutex
-	engine  *engine.Engine
-	batcher *Batcher
+	mu             sync.Mutex
+	state          controllerState
+	transitionDone chan struct{}
+	engine         *engine.Engine
+	batcher        *Batcher
+	newEngine      engineFactory
+	newBatcher     batcherFactory
 }
 
 func NewController(emitter Emitter) *Controller {
-	return &Controller{emitter: emitter}
+	return &Controller{
+		emitter:    emitter,
+		newEngine:  engine.New,
+		newBatcher: defaultBatcherFactory,
+	}
 }
 
 func (c *Controller) Start(ctx context.Context, req StartRequest) (StartResponse, error) {
 	if err := req.Config.Validate(); err != nil {
 		return StartResponse{}, err
 	}
-	e, err := engine.New(req.Config.toEngineConfig())
+
+	c.mu.Lock()
+	if c.state != controllerIdle {
+		c.mu.Unlock()
+		return StartResponse{}, engine.ErrAlreadyRunning
+	}
+	c.state = controllerStarting
+	transitionDone := make(chan struct{})
+	c.transitionDone = transitionDone
+	newEngine := c.newEngine
+	if newEngine == nil {
+		newEngine = engine.New
+	}
+	newBatcher := c.newBatcher
+	if newBatcher == nil {
+		newBatcher = defaultBatcherFactory
+	}
+	c.mu.Unlock()
+
+	e, err := newEngine(req.Config.toEngineConfig())
 	if err != nil {
+		c.rollbackStart(transitionDone, nil, nil)
+		return StartResponse{}, err
+	}
+	batcher := newBatcher(e, c.emitter, time.Duration(req.BatchIntervalMS)*time.Millisecond)
+
+	if err := e.Start(ctx); err != nil {
+		c.rollbackStart(transitionDone, e, batcher)
+		return StartResponse{}, err
+	}
+	if err := batcher.Start(ctx); err != nil {
+		c.rollbackStart(transitionDone, e, batcher)
 		return StartResponse{}, err
 	}
 
 	c.mu.Lock()
-	if c.engine != nil && c.engine.Running() {
-		c.mu.Unlock()
-		return StartResponse{}, engine.ErrAlreadyRunning
-	}
-	previousBatcher := c.batcher
 	c.engine = e
-	batcher := NewBatcher(e, c.emitter, time.Duration(req.BatchIntervalMS)*time.Millisecond)
 	c.batcher = batcher
+	c.state = controllerRunning
+	c.completeTransitionLocked(transitionDone)
 	c.mu.Unlock()
-
-	if previousBatcher != nil {
-		previousBatcher.Stop()
-	}
-
-	if err := e.Start(ctx); err != nil {
-		return StartResponse{}, err
-	}
-	if err := batcher.Start(ctx); err != nil {
-		_ = e.Stop()
-		return StartResponse{}, err
-	}
 
 	go c.stopBatcherWhenEngineStops(e, batcher)
 	return StartResponse{Started: true}, nil
 }
 
 func (c *Controller) Stop() error {
-	c.mu.Lock()
-	e := c.engine
-	batcher := c.batcher
-	c.engine = nil
-	c.batcher = nil
-	c.mu.Unlock()
+	for {
+		c.mu.Lock()
+		switch c.state {
+		case controllerIdle:
+			c.mu.Unlock()
+			return nil
+		case controllerStarting, controllerStopping:
+			transitionDone := c.transitionDone
+			c.mu.Unlock()
+			if transitionDone != nil {
+				<-transitionDone
+			}
+			continue
+		case controllerRunning:
+			e := c.engine
+			batcher := c.batcher
+			c.state = controllerStopping
+			transitionDone := make(chan struct{})
+			c.transitionDone = transitionDone
+			c.mu.Unlock()
 
-	if e == nil {
-		if batcher != nil {
-			batcher.Stop()
+			stopErr := stopEngine(e)
+			if batcher != nil {
+				batcher.Stop()
+			}
+
+			c.mu.Lock()
+			c.engine = nil
+			c.batcher = nil
+			c.state = controllerIdle
+			c.completeTransitionLocked(transitionDone)
+			c.mu.Unlock()
+			return stopErr
+		default:
+			state := c.state
+			c.mu.Unlock()
+			return fmt.Errorf("invalid controller state %d", state)
 		}
-		return ErrControllerNotStarted
 	}
-	if e.Running() {
-		if err := e.Stop(); err != nil {
-			return err
-		}
-	}
+}
+
+func (c *Controller) rollbackStart(transitionDone chan struct{}, e *engine.Engine, batcher *Batcher) {
+	_ = stopEngine(e)
 	if batcher != nil {
 		batcher.Stop()
 	}
-	return nil
+
+	c.mu.Lock()
+	c.engine = nil
+	c.batcher = nil
+	c.state = controllerIdle
+	c.completeTransitionLocked(transitionDone)
+	c.mu.Unlock()
+}
+
+func (c *Controller) completeTransitionLocked(transitionDone chan struct{}) {
+	if c.transitionDone != transitionDone {
+		return
+	}
+	close(transitionDone)
+	c.transitionDone = nil
 }
 
 func (c *Controller) Snapshot() (SnapshotResponse, error) {
@@ -183,6 +256,29 @@ func (c *Controller) stopBatcherWhenEngineStops(e *engine.Engine, batcher *Batch
 	}
 	<-done
 	batcher.Stop()
+
+	c.mu.Lock()
+	if c.state == controllerRunning && c.engine == e {
+		c.engine = nil
+		c.batcher = nil
+		c.state = controllerIdle
+	}
+	c.mu.Unlock()
+}
+
+func defaultBatcherFactory(e *engine.Engine, emitter Emitter, interval time.Duration) *Batcher {
+	return NewBatcher(e, emitter, interval)
+}
+
+func stopEngine(e *engine.Engine) error {
+	if e == nil {
+		return nil
+	}
+	err := e.Stop()
+	if errors.Is(err, engine.ErrNotRunning) {
+		return nil
+	}
+	return err
 }
 
 func (c LoadConfig) Validate() error {
