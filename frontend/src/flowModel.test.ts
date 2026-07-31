@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assessStartSafety,
   buildStartRequestFromGraph,
+  createFlowNode,
   createSavedScenario,
   initialFlowEdges,
   initialFlowNodes,
@@ -76,13 +77,19 @@ describe("scenario secret handling", () => {
       id: "request-1",
       type: "flow",
       position: { x: 0, y: 0 },
-      data: requestNodeData(),
+      data: {
+        ...requestNodeData(),
+        validationError: "runtime validation detail",
+        executionOrder: 0,
+      },
     };
 
     const scenario = createSavedScenario([node], [], createRequest());
     const serialized = JSON.stringify(scenario);
 
     expect(serialized).not.toMatch(/saved-(?:url|header|row|body|direct)-secret/);
+    expect(serialized).not.toContain("runtime validation detail");
+    expect(serialized).not.toContain("executionOrder");
     expect(serialized).toContain("SECRET_ACCESS_TOKEN");
     expect(serialized).toContain("SECRET_AUTHORIZATION");
     expect(serialized).toContain("SECRET_X_API_KEY");
@@ -161,6 +168,33 @@ describe("scenario secret handling", () => {
     expect(() => buildStartRequestFromGraph(nodes, initialFlowEdges, createRequest(), {})).toThrow(
       "Runtime secret SECRET_ACCESS_TOKEN is required",
     );
+  });
+});
+
+describe("scenario graph compilation", () => {
+  it("builds scenario steps in edge order rather than React node array order", () => {
+    const first = createFlowNode("request", 10, { url: "https://first.example", method: "GET" });
+    const delay = createFlowNode("delay", 11, { delayMs: 250 });
+    const second = createFlowNode("request", 12, { url: "https://second.example", method: "POST" });
+    const engine = createFlowNode("engine", 13, null);
+    const metrics = createFlowNode("metrics", 14, null);
+    const nodes = [metrics, second, engine, first, delay];
+    const edges = [
+      { id: "engine-metrics", source: engine.id, target: metrics.id },
+      { id: "second-engine", source: second.id, target: engine.id },
+      { id: "delay-second", source: delay.id, target: second.id },
+      { id: "first-delay", source: first.id, target: delay.id },
+    ];
+
+    const request = buildStartRequestFromGraph(nodes, edges, createRequest(), {});
+
+    expect(request.config.url).toBe("https://first.example");
+    expect(request.config.scenarioSteps.map((step) => step.kind)).toEqual([
+      "request",
+      "delay",
+      "request",
+    ]);
+    expect(request.config.scenarioSteps[2].url).toBe("https://second.example");
   });
 });
 

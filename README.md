@@ -88,6 +88,11 @@ overestimation above 1µs through the maximum 5-minute request timeout. P95 and 
 `insufficient` below 20 and 100 latency samples respectively, the minimum samples needed to resolve one
 observation in each percentile tail; this is a rank-resolution guard, not a statistical confidence interval.
 
+Scenario graphs compile as one deterministic directed path in `O(nodes + edges)` time before preflight or k6
+export. Multiple requests are supported on that path; cycles, disconnected components, branches, merges, and
+ambiguous Engine, Metrics, or Window control nodes are rejected with node-specific errors. The resolved path is
+shown above the canvas and does not depend on React node or edge array order.
+
 Request templates are parsed into literal and variable segments during configuration compilation. Each worker
 reuses one render buffer after warm-up; buffers above 64 KiB are released after the request. Static requests
 continue to use their compiled byte slices directly and retain the zero-allocation acquire/release path.

@@ -2,6 +2,7 @@ import type { Edge, Node } from "@xyflow/react";
 import { normalizeCaptureDefinition, normalizeCaptureScope } from "./captureValidation";
 import { DEFAULT_METRIC_BATCH_INTERVAL_MS, DEFAULT_METRIC_WINDOW_MS } from "./store";
 import { formatDuration } from "./format";
+import { compileScenarioGraph, type CompiledScenarioGraph } from "./graphCompiler";
 import {
   resolveSecretPlaceholders,
   sanitizeHeaderRows,
@@ -97,12 +98,13 @@ export function getHost(url: string) {
   }
 }
 
-export function getMetricWindowMs(nodes: Node<FlowNodeData>[], edges: Edge[]) {
-  const metricsNode = nodes.find((node) => node.data.kind === "metrics");
-  const connectedWindowId = metricsNode
-    ? edges.find((edge) => edge.source === metricsNode.id && nodes.find((node) => node.id === edge.target)?.data.kind === "window")?.target
+export function getMetricWindowMs(
+  nodes: Node<FlowNodeData>[],
+  compiledGraph: CompiledScenarioGraph | null,
+) {
+  const windowNode = compiledGraph?.windowNodeId
+    ? nodes.find((node) => node.id === compiledGraph.windowNodeId)
     : undefined;
-  const windowNode = nodes.find((node) => node.id === connectedWindowId) ?? nodes.find((node) => node.data.kind === "window");
   return numberValue(windowNode?.data.windowMs, DEFAULT_METRIC_WINDOW_MS);
 }
 
@@ -112,21 +114,15 @@ export function buildStartRequestFromGraph(
   fallback: StartRequest,
   authSecrets: Record<string, RuntimeAuthSecret>,
 ): StartRequest {
-  const requestNode = nodes.find((node) => node.data.kind === "request");
-  const engineNode = nodes.find((node) => node.data.kind === "engine");
-  const metricsNode = nodes.find((node) => node.data.kind === "metrics");
-  if (!requestNode) {
-    throw new Error("Scenario requires a Request node");
-  }
-  if (!engineNode) {
-    throw new Error("Scenario requires an Engine node");
-  }
-  const scenarioPath = pathToScenarioTarget(requestNode.id, engineNode.id, metricsNode?.id, edges, nodes);
-  if (scenarioPath.length === 0) {
-    throw new Error("Scenario requires a path from Request through Engine");
-  }
+  const compiled = compileScenarioGraph(nodes, edges);
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
-  const scenarioSteps = scenarioPath
+  const requestNode = nodesById.get(compiled.requestNodeId);
+  const engineNode = nodesById.get(compiled.engineNodeId);
+  const metricsNode = compiled.metricsNodeId ? nodesById.get(compiled.metricsNodeId) : undefined;
+  if (!requestNode || !engineNode) {
+    throw new Error("Scenario graph changed after validation; validate it again before starting.");
+  }
+  const scenarioSteps = compiled.path
     .map((id) => nodesById.get(id))
     .filter(isRunnableScenarioNode)
     .map((node) => nodeToScenarioStep(node, authSecrets))
@@ -508,62 +504,11 @@ function openAPIAuthSettings(endpoint: OpenAPIEndpoint): Partial<FlowNodeData> {
 }
 
 function isRunnableScenarioNode(node: Node<FlowNodeData> | undefined): node is Node<FlowNodeData> {
-  return node !== undefined && node.data.kind !== "engine";
-}
-
-function pathToScenarioTarget(
-  source: string,
-  requiredEngine: string,
-  metricsTarget: string | undefined,
-  edges: Edge[],
-  nodes: Node<FlowNodeData>[],
-) {
-  const target = metricsTarget ?? requiredEngine;
-  const path = bestPathTo(source, target, edges, nodes, requiredEngine);
-  if (path.length > 0) {
-    return path;
-  }
-  return bestPathTo(source, requiredEngine, edges, nodes);
-}
-
-function bestPathTo(source: string, target: string, edges: Edge[], nodes: Node<FlowNodeData>[], requiredNode?: string) {
-  const nextBySource = new Map<string, string[]>();
-  for (const edge of edges) {
-    const next = nextBySource.get(edge.source) ?? [];
-    next.push(edge.target);
-    nextBySource.set(edge.source, next);
-  }
-
-  const nodesById = new Map(nodes.map((node) => [node.id, node]));
-  let bestPath: string[] = [];
-  let bestScore = -1;
-  const visit = (id: string, path: string[]) => {
-    if (id === target) {
-      if (requiredNode && !path.includes(requiredNode)) {
-        return;
-      }
-      const score = path.reduce((total, nodeId) => total + scenarioPathScore(nodesById.get(nodeId)), 0);
-      if (score > bestScore || (score === bestScore && path.length > bestPath.length)) {
-        bestScore = score;
-        bestPath = path;
-      }
-      return;
-    }
-    for (const next of nextBySource.get(id) ?? []) {
-      if (!path.includes(next)) {
-        visit(next, path.concat(next));
-      }
-    }
-  };
-  visit(source, [source]);
-  return bestPath;
-}
-
-function scenarioPathScore(node: Node<FlowNodeData> | undefined) {
-  if (!node) {
-    return 0;
-  }
-  return node.data.kind === "request" || node.data.kind === "delay" || node.data.kind === "assertion" ? 1 : 0;
+  return node !== undefined && (
+    node.data.kind === "request" ||
+    node.data.kind === "delay" ||
+    node.data.kind === "assertion"
+  );
 }
 
 function nodeToScenarioStep(node: Node<FlowNodeData>, authSecrets: Record<string, RuntimeAuthSecret>): ScenarioStep | null {
@@ -699,7 +644,12 @@ function parseHeaderText(raw: string): Header[] {
 }
 
 function stripRuntimeNode(node: Node<FlowNodeData>): Node<FlowNodeData> {
-  const { onDelete: _onDelete, ...data } = node.data;
+  const {
+    executionOrder: _executionOrder,
+    onDelete: _onDelete,
+    validationError: _validationError,
+    ...data
+  } = node.data;
   return {
     id: node.id,
     type: node.type,

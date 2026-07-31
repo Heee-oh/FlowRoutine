@@ -24,8 +24,14 @@ const wheelZoomStep = 1.4;
 
 const nodeTypes = {
   flowNode: memo(function FlowNode({ id, data }: NodeProps<Node<FlowNodeData>>) {
+    const validationError = typeof data.validationError === "string" ? data.validationError : "";
+    const executionOrder = typeof data.executionOrder === "number" ? data.executionOrder : null;
     return (
-      <div className={`flow-node flow-node-${data.tone}`}>
+      <div
+        className={`flow-node flow-node-${data.tone}${validationError ? " flow-node-invalid" : ""}`}
+        aria-invalid={validationError ? true : undefined}
+        title={validationError || undefined}
+      >
         <button
           type="button"
           className="node-delete nodrag"
@@ -38,9 +44,13 @@ const nodeTypes = {
           <Trash2 size={13} />
         </button>
         <Handle type="target" position={Position.Left} />
-        <span>{data.label}</span>
+        <span>
+          {executionOrder !== null ? <b className="flow-node-order">{executionOrder + 1}</b> : null}
+          {data.label}
+        </span>
         <strong>{data.value}</strong>
         <small>{data.caption}</small>
+        {validationError ? <small className="node-validation-error" role="alert">{validationError}</small> : null}
         <Handle type="source" position={Position.Right} />
       </div>
     );

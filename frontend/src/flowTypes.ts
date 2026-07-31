@@ -52,6 +52,8 @@ export type FlowNodeData = {
   windowMs?: number;
   expectedStatus?: string;
   delayMs?: number;
+  validationError?: string;
+  executionOrder?: number;
   onDelete?: (id: string) => void;
 } & Record<string, unknown>;
 
