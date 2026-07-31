@@ -90,12 +90,21 @@ export function secretPlaceholder(name: string) {
   return `{{${secretBindingName(name)}}}`;
 }
 
-export function sanitizeHeaderRows(headers: HeaderValue[]): HeaderValue[] {
+export function sanitizeHeaderRows(
+  headers: HeaderValue[],
+  preservedTemplateNames?: ReadonlySet<string>,
+): HeaderValue[] {
   return headers.map((header) => {
     if (isSensitiveHeaderName(header.name) || isSensitiveHeaderValue(header.value)) {
+      if (isPreservedHeaderTemplateValue(header.value, preservedTemplateNames)) {
+        return { name: header.name, value: header.value };
+      }
       return { name: header.name, value: secretPlaceholder(header.name) };
     }
-    return { name: header.name, value: sanitizeURLValue(header.value) };
+    return {
+      name: header.name,
+      value: sanitizeURLValue(header.value, preservedTemplateNames),
+    };
   });
 }
 
@@ -127,15 +136,25 @@ export function sanitizeHeaderText(raw: string) {
     .join("\n");
 }
 
-export function sanitizeSensitiveURL(rawURL: string) {
-  return transformSensitiveURL(rawURL, (name) => secretPlaceholder(name));
+export function sanitizeSensitiveURL(
+  rawURL: string,
+  preservedTemplateNames?: ReadonlySet<string>,
+) {
+  return transformSensitiveURL(
+    rawURL,
+    (name) => secretPlaceholder(name),
+    preservedTemplateNames,
+  );
 }
 
 export function redactSensitiveURL(rawURL: string) {
   return transformSensitiveURL(rawURL, () => "REDACTED");
 }
 
-export function sanitizeStructuredBody(raw: string) {
+export function sanitizeStructuredBody(
+  raw: string,
+  preservedTemplateNames?: ReadonlySet<string>,
+) {
   if (!raw) {
     return raw;
   }
@@ -143,7 +162,7 @@ export function sanitizeStructuredBody(raw: string) {
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
       const parsed: unknown = JSON.parse(raw);
-      const result = sanitizeJSONValue(parsed);
+      const result = sanitizeJSONValue(parsed, preservedTemplateNames);
       if (result.changed) {
         return JSON.stringify(result.value, null, raw.includes("\n") ? 2 : undefined);
       }
@@ -156,7 +175,7 @@ export function sanitizeStructuredBody(raw: string) {
   if (lines.length > 1 && lines.every((line) => !line.trim() || line.includes("="))) {
     let changed = false;
     const sanitized = lines.map((line) => {
-      const result = sanitizeKeyValuePart(line);
+      const result = sanitizeKeyValuePart(line, preservedTemplateNames);
       changed ||= result.changed;
       return result.value;
     });
@@ -168,7 +187,7 @@ export function sanitizeStructuredBody(raw: string) {
   if (raw.includes("=")) {
     let changed = false;
     const sanitized = raw.split("&").map((part) => {
-      const result = sanitizeKeyValuePart(part);
+      const result = sanitizeKeyValuePart(part, preservedTemplateNames);
       changed ||= result.changed;
       return result.value;
     });
@@ -176,11 +195,11 @@ export function sanitizeStructuredBody(raw: string) {
       return sanitized.join("&");
     }
   }
-  const assignments = sanitizeNamedAssignments(raw);
+  const assignments = sanitizeNamedAssignments(raw, preservedTemplateNames);
   if (assignments !== raw) {
     return assignments;
   }
-  return sanitizeURLValue(raw);
+  return sanitizeURLValue(raw, preservedTemplateNames);
 }
 
 export function collectSecretPlaceholderNames(values: Array<string | null | undefined>) {
@@ -207,7 +226,11 @@ export function resolveSecretPlaceholders(value: string, bindings: Record<string
   });
 }
 
-function transformSensitiveURL(rawURL: string, replacement: (name: string) => string) {
+function transformSensitiveURL(
+  rawURL: string,
+  replacement: (name: string) => string,
+  preservedTemplateNames?: ReadonlySet<string>,
+) {
   try {
     const url = new URL(rawURL);
     if (url.username) {
@@ -219,50 +242,77 @@ function transformSensitiveURL(rawURL: string, replacement: (name: string) => st
     const queryNames = Array.from(new Set(url.searchParams.keys()));
     for (const name of queryNames) {
       if (isSensitiveQueryParameter(name)) {
+        const values = url.searchParams.getAll(name);
+        if (
+          values.length > 0 &&
+          values.every((value) => isPreservedTemplateValue(value, preservedTemplateNames))
+        ) {
+          continue;
+        }
         url.searchParams.set(name, replacement(name));
       }
     }
-    url.hash = transformURLFragment(url.hash, replacement);
+    url.hash = transformURLFragment(url.hash, replacement, preservedTemplateNames);
     return restoreEncodedTemplates(url.toString());
   } catch {
-    return transformRelativeURL(rawURL, replacement);
+    return transformRelativeURL(rawURL, replacement, preservedTemplateNames);
   }
 }
 
-function transformRelativeURL(rawURL: string, replacement: (name: string) => string) {
+function transformRelativeURL(
+  rawURL: string,
+  replacement: (name: string) => string,
+  preservedTemplateNames?: ReadonlySet<string>,
+) {
   const hashAt = rawURL.indexOf("#");
   const withoutHash = hashAt >= 0 ? rawURL.slice(0, hashAt) : rawURL;
   const hash = hashAt >= 0 ? rawURL.slice(hashAt) : "";
-  const sanitizedHash = transformURLFragment(hash, replacement);
+  const sanitizedHash = transformURLFragment(hash, replacement, preservedTemplateNames);
   const queryAt = withoutHash.indexOf("?");
   if (queryAt < 0) {
     return sanitizedHash === hash ? rawURL : `${withoutHash}${sanitizedHash}`;
   }
   const path = withoutHash.slice(0, queryAt);
-  const query = transformQueryString(withoutHash.slice(queryAt + 1), replacement);
+  const query = transformQueryString(
+    withoutHash.slice(queryAt + 1),
+    replacement,
+    preservedTemplateNames,
+  );
   return query.changed || sanitizedHash !== hash
     ? `${path}?${query.value}${sanitizedHash}`
     : rawURL;
 }
 
-function transformURLFragment(hash: string, replacement: (name: string) => string) {
+function transformURLFragment(
+  hash: string,
+  replacement: (name: string) => string,
+  preservedTemplateNames?: ReadonlySet<string>,
+) {
   if (!hash) {
     return hash;
   }
   const fragment = hash.startsWith("#") ? hash.slice(1) : hash;
   const queryAt = fragment.indexOf("?");
   if (queryAt >= 0) {
-    const query = transformQueryString(fragment.slice(queryAt + 1), replacement);
+    const query = transformQueryString(
+      fragment.slice(queryAt + 1),
+      replacement,
+      preservedTemplateNames,
+    );
     return query.changed ? `#${fragment.slice(0, queryAt + 1)}${query.value}` : hash;
   }
   if (!fragment.includes("=")) {
     return hash;
   }
-  const query = transformQueryString(fragment, replacement);
+  const query = transformQueryString(fragment, replacement, preservedTemplateNames);
   return query.changed ? `#${query.value}` : hash;
 }
 
-function transformQueryString(rawQuery: string, replacement: (name: string) => string) {
+function transformQueryString(
+  rawQuery: string,
+  replacement: (name: string) => string,
+  preservedTemplateNames?: ReadonlySet<string>,
+) {
   let changed = false;
   const value = rawQuery.split("&").map((part) => {
     const splitAt = part.indexOf("=");
@@ -271,17 +321,25 @@ function transformQueryString(rawQuery: string, replacement: (name: string) => s
     if (!isSensitiveQueryParameter(name)) {
       return part;
     }
+    const encodedValue = splitAt >= 0 ? part.slice(splitAt + 1) : "";
+    const decodedValue = safeDecodeURIComponent(encodedValue.replace(/\+/g, " "));
+    if (isPreservedTemplateValue(decodedValue, preservedTemplateNames)) {
+      return part;
+    }
     changed = true;
     return `${encodedName}=${replacement(name)}`;
   }).join("&");
   return { value, changed };
 }
 
-function sanitizeJSONValue(value: unknown): { value: unknown; changed: boolean } {
+function sanitizeJSONValue(
+  value: unknown,
+  preservedTemplateNames?: ReadonlySet<string>,
+): { value: unknown; changed: boolean } {
   if (Array.isArray(value)) {
     let changed = false;
     const next = value.map((item) => {
-      const result = sanitizeJSONValue(item);
+      const result = sanitizeJSONValue(item, preservedTemplateNames);
       changed ||= result.changed;
       return result.value;
     });
@@ -291,31 +349,45 @@ function sanitizeJSONValue(value: unknown): { value: unknown; changed: boolean }
     let changed = false;
     const next = Object.fromEntries(Object.entries(value).map(([key, item]) => {
       if (isSensitiveQueryParameter(key)) {
+        if (
+          typeof item === "string" &&
+          isPreservedTemplateValue(item, preservedTemplateNames)
+        ) {
+          return [key, item];
+        }
         changed = true;
         return [key, secretPlaceholder(key)];
       }
-      const result = sanitizeJSONValue(item);
+      const result = sanitizeJSONValue(item, preservedTemplateNames);
       changed ||= result.changed;
       return [key, result.value];
     }));
     return { value: changed ? next : value, changed };
   }
   if (typeof value === "string") {
-    const sanitized = sanitizeURLValue(value);
+    const sanitized = sanitizeURLValue(value, preservedTemplateNames);
     return { value: sanitized, changed: sanitized !== value };
   }
   return { value, changed: false };
 }
 
-function sanitizeURLValue(value: string) {
-  return /^https?:\/\//i.test(value) ? sanitizeSensitiveURL(value) : value;
+function sanitizeURLValue(
+  value: string,
+  preservedTemplateNames?: ReadonlySet<string>,
+) {
+  return /^https?:\/\//i.test(value)
+    ? sanitizeSensitiveURL(value, preservedTemplateNames)
+    : value;
 }
 
 function redactURLValue(value: string) {
   return /^https?:\/\//i.test(value) ? redactSensitiveURL(value) : value;
 }
 
-function sanitizeKeyValuePart(part: string) {
+function sanitizeKeyValuePart(
+  part: string,
+  preservedTemplateNames?: ReadonlySet<string>,
+) {
   const splitAt = part.indexOf("=");
   if (splitAt < 1) {
     return { value: part, changed: false };
@@ -325,13 +397,21 @@ function sanitizeKeyValuePart(part: string) {
   if (!isSensitiveQueryParameter(name)) {
     return { value: part, changed: false };
   }
+  const rawValue = part.slice(splitAt + 1).trim();
+  const decodedValue = safeDecodeURIComponent(rawValue.replace(/\+/g, " "));
+  if (isPreservedTemplateValue(decodedValue, preservedTemplateNames)) {
+    return { value: part, changed: false };
+  }
   return {
     value: `${part.slice(0, splitAt + 1)}${secretPlaceholder(name)}`,
     changed: true,
   };
 }
 
-function sanitizeNamedAssignments(raw: string) {
+function sanitizeNamedAssignments(
+  raw: string,
+  preservedTemplateNames?: ReadonlySet<string>,
+) {
   return raw.replace(
     /(["']?)([a-z_][a-z0-9_.-]*)\1(\s*[:=]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^,\s;&}\]\r\n]+)/gi,
     (match, keyQuote: string, key: string, separator: string, value: string) => {
@@ -339,9 +419,37 @@ function sanitizeNamedAssignments(raw: string) {
         return match;
       }
       const valueQuote = value[0] === "\"" || value[0] === "'" ? value[0] : "";
+      const unquotedValue = valueQuote ? value.slice(1, -1) : value;
+      if (isPreservedTemplateValue(unquotedValue, preservedTemplateNames)) {
+        return match;
+      }
       return `${keyQuote}${key}${keyQuote}${separator}${valueQuote}${secretPlaceholder(key)}${valueQuote}`;
     },
   );
+}
+
+function isPreservedHeaderTemplateValue(
+  value: string,
+  preservedTemplateNames?: ReadonlySet<string>,
+) {
+  const match = value.match(
+    /^\s*(?:(?:basic|bearer|digest|hawk|token)\s+)?(\{\{\s*[^{}]+\s*\}\})\s*$/i,
+  );
+  return Boolean(
+    match &&
+    isPreservedTemplateValue(match[1], preservedTemplateNames),
+  );
+}
+
+function isPreservedTemplateValue(
+  value: string,
+  preservedTemplateNames?: ReadonlySet<string>,
+) {
+  if (!preservedTemplateNames || preservedTemplateNames.size === 0) {
+    return false;
+  }
+  const match = value.match(/^\s*\{\{\s*([^{}]+?)\s*\}\}\s*$/);
+  return Boolean(match && preservedTemplateNames.has(match[1].trim()));
 }
 
 function restoreEncodedTemplates(value: string) {

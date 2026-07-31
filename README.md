@@ -82,6 +82,14 @@ Request templates are parsed into literal and variable segments during configura
 reuses one render buffer after warm-up; buffers above 64 KiB are released after the request. Static requests
 continue to use their compiled byte slices directly and retain the zero-allocation acquire/release path.
 
+### k6 export compatibility
+
+Exports map VUs, total duration, worker ramp-up, request timeouts, quality thresholds, captures, and status
+assertions. FlowRoutine's global request cap maps to k6's `rps` option so multi-request scenarios retain a
+request-level limit; k6 [discourages this option](https://grafana.com/docs/k6/latest/using-k6/k6-options/reference/#rps)
+and applies it once per load generator, so distributed or cloud runs multiply the effective cap. k6 also
+samples every request and has no direct equivalent for FlowRoutine connection buffers or response-size limits.
+
 ## Architecture
 
 ```text
