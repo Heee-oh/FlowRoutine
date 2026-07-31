@@ -23,6 +23,9 @@ type ReportConfig = {
   durationMs: number;
   requestTimeoutMs: number;
   maxConnsPerHost: number;
+  readBufferSize: number;
+  writeBufferSize: number;
+  maxResponseBytes: number;
   latencySampleRate: number;
   rateLimitRps: number;
   rampUpMs: number;
@@ -152,6 +155,9 @@ export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): 
       durationMs: request.config.durationMs,
       requestTimeoutMs: request.config.requestTimeoutMs,
       maxConnsPerHost: request.config.maxConnsPerHost,
+      readBufferSize: request.config.readBufferSize,
+      writeBufferSize: request.config.writeBufferSize,
+      maxResponseBytes: request.config.maxResponseBytes,
       latencySampleRate: request.config.latencySampleRate,
       rateLimitRps: request.config.rateLimitRps,
       rampUpMs: request.config.rampUpMs,

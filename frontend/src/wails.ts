@@ -13,6 +13,17 @@ export function startLoad(request: StartRequest) {
   });
 }
 
+export function preflightLoad(request: StartRequest) {
+  const preflightLoad = window.go?.main?.App?.PreflightLoad;
+  if (!preflightLoad) {
+    return Promise.reject(new Error("Wails bridge is unavailable"));
+  }
+  return preflightLoad({
+    config: request.config,
+    batchIntervalMs: request.batchIntervalMs,
+  });
+}
+
 export function stopLoad() {
   const stopLoad = window.go?.main?.App?.StopLoad;
   if (!stopLoad) {

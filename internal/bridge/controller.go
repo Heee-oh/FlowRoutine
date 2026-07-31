@@ -10,14 +10,6 @@ import (
 	"flowroutine/internal/engine"
 )
 
-const (
-	MinDuration     = time.Millisecond
-	MaxDuration     = time.Hour
-	MaxRampUp       = time.Hour
-	MaxRequestDelay = 5 * time.Minute
-	MaxVirtualUsers = 100_000
-)
-
 var ErrControllerNotStarted = errors.New("bridge controller has no active engine")
 
 type StartRequest struct {
@@ -26,7 +18,8 @@ type StartRequest struct {
 }
 
 type StartResponse struct {
-	Started bool `json:"started"`
+	Started   bool              `json:"started"`
+	Preflight PreflightResponse `json:"preflight"`
 }
 
 type Header struct {
@@ -125,9 +118,12 @@ func NewController(emitter Emitter) *Controller {
 }
 
 func (c *Controller) Start(ctx context.Context, req StartRequest) (StartResponse, error) {
-	if err := req.Config.Validate(); err != nil {
+	preflight, err := preflightStartRequest(req)
+	if err != nil {
 		return StartResponse{}, err
 	}
+	req.Config = preflight.normalizedConfig
+	req.BatchIntervalMS = preflight.EffectiveBatchIntervalMS
 
 	c.mu.Lock()
 	if c.state != controllerIdle {
@@ -171,7 +167,11 @@ func (c *Controller) Start(ctx context.Context, req StartRequest) (StartResponse
 	c.mu.Unlock()
 
 	go c.stopBatcherWhenEngineStops(e, batcher)
-	return StartResponse{Started: true}, nil
+	return StartResponse{Started: true, Preflight: preflight}, nil
+}
+
+func (c *Controller) Preflight(req StartRequest) (PreflightResponse, error) {
+	return preflightStartRequest(req)
 }
 
 func (c *Controller) Stop() error {
@@ -279,41 +279,6 @@ func stopEngine(e *engine.Engine) error {
 		return nil
 	}
 	return err
-}
-
-func (c LoadConfig) Validate() error {
-	duration := time.Duration(c.DurationMS) * time.Millisecond
-	requestTimeout := time.Duration(c.RequestTimeoutMS) * time.Millisecond
-	rampUp := time.Duration(c.RampUpMS) * time.Millisecond
-
-	if duration < MinDuration {
-		return fmt.Errorf("duration must be at least %s", MinDuration)
-	}
-	if duration > MaxDuration {
-		return fmt.Errorf("duration must be at most %s", MaxDuration)
-	}
-	if requestTimeout <= 0 {
-		return errors.New("request timeout must be greater than 0")
-	}
-	if requestTimeout > MaxRequestDelay {
-		return fmt.Errorf("request timeout must be at most %s", MaxRequestDelay)
-	}
-	if c.VirtualUsers < 1 {
-		return errors.New("virtual users must be at least 1")
-	}
-	if c.VirtualUsers > MaxVirtualUsers {
-		return fmt.Errorf("virtual users must be at most %d", MaxVirtualUsers)
-	}
-	if c.RateLimitRPS < 0 {
-		return errors.New("rate limit rps must be greater than or equal to 0")
-	}
-	if rampUp < 0 {
-		return errors.New("ramp-up must be greater than or equal to 0")
-	}
-	if rampUp > MaxRampUp {
-		return fmt.Errorf("ramp-up must be at most %s", MaxRampUp)
-	}
-	return nil
 }
 
 func (c LoadConfig) toEngineConfig() engine.Config {

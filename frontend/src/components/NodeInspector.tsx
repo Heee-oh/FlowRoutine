@@ -232,7 +232,7 @@ const NodeFields = memo(function NodeFields({
         <>
           <div className="field-grid">
             <Field label="VUs">
-              <NumberInput value={node.data.virtualUsers ?? 1} min={1} onChange={(value) => updateNode({ virtualUsers: value })} />
+              <NumberInput value={node.data.virtualUsers ?? 1} min={1} max={100_000} onChange={(value) => updateNode({ virtualUsers: value })} />
             </Field>
             <Field label="Duration ms">
               <NumberInput value={node.data.durationMs ?? 1} min={1} max={3_600_000} onChange={(value) => updateNode({ durationMs: value })} />
@@ -243,12 +243,23 @@ const NodeFields = memo(function NodeFields({
               <NumberInput value={node.data.requestTimeoutMs ?? 1} min={1} max={300_000} onChange={(value) => updateNode({ requestTimeoutMs: value })} />
             </Field>
             <Field label="Max conns">
-              <NumberInput value={node.data.maxConnsPerHost ?? 10_000} min={1} onChange={(value) => updateNode({ maxConnsPerHost: value })} />
+              <NumberInput value={node.data.maxConnsPerHost ?? 10_000} min={1} max={100_000} onChange={(value) => updateNode({ maxConnsPerHost: value })} />
             </Field>
           </div>
           <div className="field-grid">
+            <Field label="Read buffer bytes">
+              <NumberInput value={node.data.readBufferSize ?? 4_096} min={1_024} max={1_048_576} onChange={(value) => updateNode({ readBufferSize: value })} />
+            </Field>
+            <Field label="Write buffer bytes">
+              <NumberInput value={node.data.writeBufferSize ?? 4_096} min={1_024} max={1_048_576} onChange={(value) => updateNode({ writeBufferSize: value })} />
+            </Field>
+          </div>
+          <Field label="Max response bytes">
+            <NumberInput value={node.data.maxResponseBytes ?? 1_048_576} min={1_024} max={67_108_864} onChange={(value) => updateNode({ maxResponseBytes: value })} />
+          </Field>
+          <div className="field-grid">
             <Field label="Rate limit RPS">
-              <NumberInput value={node.data.rateLimitRps ?? 0} min={0} onChange={(value) => updateNode({ rateLimitRps: value })} />
+              <NumberInput value={node.data.rateLimitRps ?? 0} min={0} max={10_000_000} onChange={(value) => updateNode({ rateLimitRps: value })} />
             </Field>
             <Field label="Ramp-up ms">
               <NumberInput value={node.data.rampUpMs ?? 0} min={0} max={3_600_000} onChange={(value) => updateNode({ rampUpMs: value })} />
@@ -264,8 +275,8 @@ const NodeFields = memo(function NodeFields({
       );
     case "delay":
       return (
-        <Field label="Delay ms">
-          <NumberInput value={node.data.delayMs ?? 100} min={0} onChange={(value) => updateNode({ delayMs: value })} />
+          <Field label="Delay ms">
+            <NumberInput value={node.data.delayMs ?? 100} min={0} max={300_000} onChange={(value) => updateNode({ delayMs: value })} />
         </Field>
       );
     case "metrics":
@@ -275,7 +286,7 @@ const NodeFields = memo(function NodeFields({
             <NumberInput value={node.data.batchIntervalMs ?? 150} min={100} max={200} onChange={(value) => updateNode({ batchIntervalMs: value })} />
           </Field>
           <Field label="Latency sample rate">
-            <NumberInput value={node.data.latencySampleRate ?? 1} min={1} onChange={(value) => updateNode({ latencySampleRate: value })} />
+            <NumberInput value={node.data.latencySampleRate ?? 1} min={1} max={1_000_000} onChange={(value) => updateNode({ latencySampleRate: value })} />
           </Field>
           <div className="field-grid">
             <Field label="Max fail %">
