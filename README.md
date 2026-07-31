@@ -69,6 +69,11 @@ Metric summaries use the final cumulative engine snapshot and remain exact. Real
 2,048 lightweight points, while exported report timelines retain at most 1,000 points. Streaming downsampling
 preserves the first and last samples plus per-bucket RPS, P95, and P99 minimum and maximum excursions.
 
+Global request limits use one central pacer per engine run across all scenario steps. Up to 1,000 RPS it keeps
+a single-permit burst and issues one permit every `1 / RPS`; higher rates are emitted in bounded 1ms batches.
+Missed permits are not queued beyond one pacer tick. Saturated one-second tests allow ±20% scheduling
+tolerance; longer runs converge more closely.
+
 ## Architecture
 
 ```text

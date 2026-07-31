@@ -2,49 +2,91 @@ package engine
 
 import (
 	"context"
-	"sync/atomic"
 	"time"
 )
 
 type rateLimiter struct {
-	intervalNano int64
-	nextNano     atomic.Int64
+	interval         time.Duration
+	permitsPerTick   int
+	remainderPerTick int
+	permitCapacity   int
+	permits          chan struct{}
 }
 
+const maxPacerTicksPerSecond = 1_000
+
 func newRateLimiter(rps int) *rateLimiter {
-	interval := int64(time.Second) / int64(rps)
-	if interval < 1 {
-		interval = 1
+	if rps < 1 {
+		rps = 1
 	}
-	limiter := &rateLimiter{intervalNano: interval}
-	limiter.Reset(time.Now())
+	limiter := &rateLimiter{
+		interval:       time.Second / time.Duration(rps),
+		permitsPerTick: 1,
+		permitCapacity: 1,
+	}
+	if rps > maxPacerTicksPerSecond {
+		limiter.interval = time.Second / maxPacerTicksPerSecond
+		limiter.permitsPerTick = rps / maxPacerTicksPerSecond
+		limiter.remainderPerTick = rps % maxPacerTicksPerSecond
+		limiter.permitCapacity = limiter.permitsPerTick
+		if limiter.remainderPerTick > 0 {
+			limiter.permitCapacity++
+		}
+	}
+	limiter.Reset()
 	return limiter
 }
 
-func (l *rateLimiter) Reset(now time.Time) {
-	l.nextNano.Store(now.UnixNano())
+func (l *rateLimiter) Reset() {
+	l.permits = make(chan struct{}, l.permitCapacity)
+	l.permits <- struct{}{}
 }
 
 func (l *rateLimiter) Wait(ctx context.Context) bool {
-	for {
-		now := time.Now().UnixNano()
-		loaded := l.nextNano.Load()
-		reserved := loaded
-		if reserved < now {
-			reserved = now
+	permits := l.permits
+	select {
+	case <-ctx.Done():
+		return false
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-permits:
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+			return true
 		}
-		if l.nextNano.CompareAndSwap(loaded, reserved+l.intervalNano) {
-			delay := time.Duration(reserved - now)
-			if delay <= 0 {
-				return true
+	}
+}
+
+func (l *rateLimiter) Run(ctx context.Context) {
+	permits := l.permits
+	ticker := time.NewTicker(l.interval)
+	defer ticker.Stop()
+	remainder := 0
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			count := l.permitsPerTick
+			remainder += l.remainderPerTick
+			if remainder >= maxPacerTicksPerSecond {
+				count++
+				remainder -= maxPacerTicksPerSecond
 			}
-			timer := time.NewTimer(delay)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return false
-			case <-timer.C:
-				return true
+		sendPermits:
+			for range count {
+				select {
+				case permits <- struct{}{}:
+				default:
+					// Keep at most one tick of unused capacity; missed permits are dropped.
+					break sendPermits
+				}
 			}
 		}
 	}
