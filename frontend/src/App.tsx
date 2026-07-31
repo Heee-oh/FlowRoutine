@@ -11,6 +11,7 @@ import {
 import { FileCode, HelpCircle, Play, Square, Workflow } from "lucide-react";
 import { FlowCanvas } from "./components/FlowCanvas";
 import { HelpDialog, OpenAPIImportDialog, StartConfirmDialog } from "./components/Dialogs";
+import { ImportPreviewDialog } from "./components/ImportPreviewDialog";
 import { MetricGrid, MetricsChart } from "./components/Metrics";
 import { NodeInspector } from "./components/NodeInspector";
 import { NodePalette } from "./components/NodePalette";
@@ -34,6 +35,15 @@ import type { FlowNodeData, FlowNodeKind, RuntimeAuthSecret, SafetyAssessment, S
 import { validateScenarioGraph } from "./graphCompiler";
 import { parseHarArchive } from "./harImport";
 import type { HelpLanguage, HelpTopic } from "./help";
+import {
+  appendImportedRequestsToGraph,
+  buildReplacementImportGraph,
+  type ImportedRequest,
+  type RequestImportMode,
+  type RequestImportPreview,
+  type RequestImportSource,
+} from "./importGraph";
+import { assertImportFileSize } from "./importValidation";
 import { downloadK6Script } from "./k6Export";
 import { parsePostmanCollection } from "./postmanImport";
 import { purgeLegacyRunBaselines } from "./report";
@@ -46,9 +56,13 @@ import type {
 } from "./types";
 import { importOpenAPI, onMetricsBatch, preflightLoad, startLoad, stopLoad } from "./wails";
 
-type ImportedRequest = {
-  name: string;
-  settings: Partial<FlowNodeData>;
+type ImportUndo = {
+  authSecrets: Record<string, RuntimeAuthSecret>;
+  edges: Edge[];
+  message: string;
+  nextNodeIndex: number;
+  nodes: Node<FlowNodeData>[];
+  selectedNodeId: string | null;
 };
 
 export function App() {
@@ -73,12 +87,16 @@ export function App() {
   const [openAPIImportError, setOpenAPIImportError] = useState("");
   const [openAPIImportMessage, setOpenAPIImportMessage] = useState("");
   const [openAPIImported, setOpenAPIImported] = useState<OpenAPIImportResponse | null>(null);
+  const [pendingRequestImport, setPendingRequestImport] = useState<RequestImportPreview | null>(null);
+  const [requestImportError, setRequestImportError] = useState("");
+  const [importUndo, setImportUndo] = useState<ImportUndo | null>(null);
   const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>(loadSavedScenarios);
   const [authSecrets, setAuthSecrets] = useState<Record<string, RuntimeAuthSecret>>({});
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<Node<FlowNodeData>>(initialFlowNodes);
   const [flowEdges, setFlowEdges, onFlowEdgesChange] = useEdgesState<Edge>(initialFlowEdges);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const nextNodeIndex = useRef(initialFlowNodes.length);
+  const nextRequestImportId = useRef(1);
   const selectedNode = useMemo(
     () => flowNodes.find((node) => node.id === selectedNodeId) ?? null,
     [flowNodes, selectedNodeId],
@@ -381,63 +399,92 @@ export function App() {
     setOpenAPIImported(null);
   }, [handleDeleteNode, openAPIImported, setFlowNodes]);
 
-  const replaceGraphWithImportedRequests = useCallback((importedRequests: ImportedRequest[]) => {
-    const requestNodes = importedRequests.map((item, index) => {
-      const node = createFlowNode(
-        "request",
-        index,
-        item.settings,
-        { x: 20 + index * 240, y: 80 },
-        handleDeleteNode,
-      );
-      return {
-        ...node,
-        data: {
-          ...node.data,
-          label: item.name.slice(0, 42) || "Request",
-        },
-      };
-    });
-    const engineIndex = requestNodes.length;
-    const metricsIndex = engineIndex + 1;
-    const windowIndex = engineIndex + 2;
-    const engineNode = createFlowNode("engine", engineIndex, null, { x: 20 + engineIndex * 240, y: 80 }, handleDeleteNode);
-    const metricsNode = createFlowNode("metrics", metricsIndex, null, { x: 20 + metricsIndex * 240, y: 80 }, handleDeleteNode);
-    const windowNode = createFlowNode("window", windowIndex, null, { x: 20 + metricsIndex * 240, y: 215 }, handleDeleteNode);
-    const edges: Edge[] = requestNodes.map((node, index) => ({
-      id: index === requestNodes.length - 1 ? `${node.id}-${engineNode.id}` : `${node.id}-${requestNodes[index + 1].id}`,
-      source: node.id,
-      target: index === requestNodes.length - 1 ? engineNode.id : requestNodes[index + 1].id,
-    }));
-    edges.push(
-      { id: `${engineNode.id}-${metricsNode.id}`, source: engineNode.id, target: metricsNode.id },
-      { id: `${metricsNode.id}-${windowNode.id}`, source: metricsNode.id, target: windowNode.id },
-    );
-    const nodes = requestNodes.concat(engineNode, metricsNode, windowNode);
-    setFlowNodes(nodes);
-    setFlowEdges(edges);
-    setSelectedNodeId(requestNodes[0]?.id ?? null);
-    setAuthSecrets({});
-    nextNodeIndex.current = nodes.length;
-  }, [handleDeleteNode, setFlowEdges, setFlowNodes]);
-
-  const handleImportPostmanFile = useCallback(async (file: File) => {
+  const prepareRequestImport = useCallback(async (source: RequestImportSource, file: File) => {
+    const label = source === "Postman" ? "Postman collection" : "HAR file";
     try {
       setError("");
-      replaceGraphWithImportedRequests(parsePostmanCollection(await file.text()));
+      setRequestImportError("");
+      assertImportFileSize(file.size, label);
+      const raw = await file.text();
+      const requests = source === "Postman"
+        ? parsePostmanCollection(raw)
+        : parseHarArchive(raw);
+      setPendingRequestImport({
+        id: nextRequestImportId.current,
+        fileName: file.name,
+        fileSize: file.size,
+        requests,
+        source,
+      });
+      nextRequestImportId.current += 1;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to import Postman collection");
+      setPendingRequestImport(null);
+      setError(err instanceof Error ? err.message : `Failed to read ${label}`);
     }
-  }, [replaceGraphWithImportedRequests, setError]);
+  }, [setError]);
 
-  const handleImportHarFile = useCallback(async (file: File) => {
+  const handleImportPostmanFile = useCallback((file: File) => {
+    void prepareRequestImport("Postman", file);
+  }, [prepareRequestImport]);
+
+  const handleImportHarFile = useCallback((file: File) => {
+    void prepareRequestImport("HAR", file);
+  }, [prepareRequestImport]);
+
+  const handleCancelRequestImport = useCallback(() => {
+    setPendingRequestImport(null);
+    setRequestImportError("");
+  }, []);
+
+  const handleConfirmRequestImport = useCallback((requests: ImportedRequest[], mode: RequestImportMode) => {
+    if (!pendingRequestImport) {
+      return;
+    }
     try {
       setError("");
-      replaceGraphWithImportedRequests(parseHarArchive(await file.text()));
+      setRequestImportError("");
+      const importedGraph = mode === "replace"
+        ? buildReplacementImportGraph(requests, handleDeleteNode)
+        : appendImportedRequestsToGraph(
+          flowNodes,
+          flowEdges,
+          requests,
+          nextNodeIndex.current,
+          handleDeleteNode,
+        );
+      setImportUndo({
+        authSecrets,
+        edges: flowEdges,
+        message: `${mode === "replace" ? "Replaced the graph with" : "Appended"} ${requests.length} ${pendingRequestImport.source} request${requests.length === 1 ? "" : "s"}.`,
+        nextNodeIndex: nextNodeIndex.current,
+        nodes: flowNodes,
+        selectedNodeId,
+      });
+      setFlowNodes(importedGraph.nodes);
+      setFlowEdges(importedGraph.edges);
+      setSelectedNodeId(importedGraph.selectedNodeId);
+      if (mode === "replace") {
+        setAuthSecrets({});
+      }
+      nextNodeIndex.current = importedGraph.nextNodeIndex;
+      setPendingRequestImport(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to import HAR file");
+      setRequestImportError(err instanceof Error ? err.message : "Failed to apply request import");
     }
-  }, [replaceGraphWithImportedRequests, setError]);
+  }, [authSecrets, flowEdges, flowNodes, handleDeleteNode, pendingRequestImport, selectedNodeId, setError, setFlowEdges, setFlowNodes]);
+
+  const handleUndoRequestImport = useCallback(() => {
+    if (!importUndo) {
+      return;
+    }
+    setFlowNodes(importUndo.nodes);
+    setFlowEdges(importUndo.edges);
+    setSelectedNodeId(importUndo.selectedNodeId);
+    setAuthSecrets(importUndo.authSecrets);
+    nextNodeIndex.current = importUndo.nextNodeIndex;
+    setImportUndo(null);
+    setError("");
+  }, [importUndo, setError, setFlowEdges, setFlowNodes]);
 
   return (
     <div className="app-shell">
@@ -504,6 +551,16 @@ export function App() {
           onImportPostman={handleImportPostmanFile}
         />
 
+        {importUndo ? (
+          <div className="import-undo" role="status">
+            <span>{importUndo.message}</span>
+            <div>
+              <button type="button" className="secondary" onClick={handleUndoRequestImport}>Undo import</button>
+              <button type="button" className="secondary" onClick={() => setImportUndo(null)}>Dismiss</button>
+            </div>
+          </div>
+        ) : null}
+
         <ScenarioPath nodes={flowNodes} validation={graphValidation} />
 
         <FlowCanvas
@@ -544,6 +601,16 @@ export function App() {
           onCancel={handleCloseOpenAPIImport}
           onSelectEndpoint={handleSelectOpenAPIEndpoint}
           onSubmit={handleSubmitOpenAPIImport}
+        />
+      ) : null}
+      {pendingRequestImport ? (
+        <ImportPreviewDialog
+          key={pendingRequestImport.id}
+          appendAvailable={Boolean(graphValidation.compiled)}
+          error={requestImportError}
+          preview={pendingRequestImport}
+          onCancel={handleCancelRequestImport}
+          onConfirm={handleConfirmRequestImport}
         />
       ) : null}
     </div>

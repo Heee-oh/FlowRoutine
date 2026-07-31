@@ -1,14 +1,15 @@
-import type { FlowNodeData } from "./flowTypes";
 import {
   sanitizeHeaderRows,
   sanitizeSensitiveURL,
   sanitizeStructuredBody,
 } from "./secretSanitization";
+import type { ImportedRequest } from "./importGraph";
+import {
+  assertImportRequestCount,
+  parseBoundedImportJSON,
+} from "./importValidation";
 
-export type PostmanRequestImport = {
-  name: string;
-  settings: Partial<FlowNodeData>;
-};
+export type PostmanRequestImport = ImportedRequest;
 
 type PostmanCollection = {
   info?: {
@@ -54,12 +55,7 @@ type PostmanHeader = {
 const supportedMethods = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
 
 export function parsePostmanCollection(raw: string): PostmanRequestImport[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`Postman collection must be JSON: ${err instanceof Error ? err.message : "invalid JSON"}`);
-  }
+  const parsed = parseBoundedImportJSON(raw, "Postman collection");
   if (!isObject(parsed) || !Array.isArray((parsed as PostmanCollection).item)) {
     throw new Error("Postman collection is missing an item array");
   }
@@ -74,10 +70,18 @@ export function parsePostmanCollection(raw: string): PostmanRequestImport[] {
 
 function flattenItems(items: PostmanItem[], path: string[]): PostmanRequestImport[] {
   const requests: PostmanRequestImport[] = [];
-  for (const item of items) {
-    const nextPath = item.name ? path.concat(item.name) : path;
+  const pending = items.slice().reverse().map((item) => ({ item, path }));
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || !isObject(current.item)) {
+      continue;
+    }
+    const item = current.item as PostmanItem;
+    const nextPath = item.name ? current.path.concat(item.name) : current.path;
     if (Array.isArray(item.item)) {
-      requests.push(...flattenItems(item.item, nextPath));
+      for (let index = item.item.length - 1; index >= 0; index -= 1) {
+        pending.push({ item: item.item[index], path: nextPath });
+      }
       continue;
     }
     const request = normalizeRequest(item.request);
@@ -85,6 +89,7 @@ function flattenItems(items: PostmanItem[], path: string[]): PostmanRequestImpor
       continue;
     }
     const method = normalizeMethod(request.method);
+    assertImportRequestCount(requests.length + 1, "Postman collection");
     requests.push({
       name: sanitizeSensitiveURL(nextPath.join(" / ") || `${method} request`),
       settings: {

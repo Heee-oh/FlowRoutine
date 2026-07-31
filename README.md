@@ -81,6 +81,11 @@ documents. Redirect and reference destinations reuse the same network policy. Im
 per document, 20 MiB total, 16 documents, 5 redirects, 64 reference levels, 10,000 references, and 200,000
 resolved nodes; cyclic or unresolved references fail without returning the source document over the bridge.
 
+Postman and HAR imports are capped at 5 MiB, 64 JSON nesting levels, and 500 runnable requests. Valid files
+open a searchable selection preview before any graph state changes. Append inserts requests before Engine;
+replace requires an explicit destructive choice. A successful import is one-step undoable, while read, parse,
+validation, and graph-compilation failures leave the active graph and runtime secrets unchanged.
+
 Engine counters use `min(VUs, 4 × GOMAXPROCS, 256)` stable stripes. Status-code and latency-histogram storage,
 snapshot scans, and reset work therefore stop growing with virtual users after the CPU-scaled stripe cap.
 The 1,024-bucket latency histogram has at most 1µs absolute overestimation from 0–1µs and less than 2% relative

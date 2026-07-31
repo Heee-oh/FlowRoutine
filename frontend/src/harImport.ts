@@ -1,14 +1,15 @@
-import type { FlowNodeData } from "./flowTypes";
 import {
   sanitizeHeaderRows,
   sanitizeSensitiveURL,
   sanitizeStructuredBody,
 } from "./secretSanitization";
+import type { ImportedRequest } from "./importGraph";
+import {
+  assertImportRequestCount,
+  parseBoundedImportJSON,
+} from "./importValidation";
 
-export type HarRequestImport = {
-  name: string;
-  settings: Partial<FlowNodeData>;
-};
+export type HarRequestImport = ImportedRequest;
 
 type HarArchive = {
   log?: {
@@ -53,20 +54,21 @@ const skippedExtensions = /\.(avif|bmp|css|gif|ico|jpg|jpeg|js|map|png|svg|ttf|w
 const skippedMimeTypes = /^(image|font)\//i;
 
 export function parseHarArchive(raw: string): HarRequestImport[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`HAR file must be JSON: ${err instanceof Error ? err.message : "invalid JSON"}`);
-  }
+  const parsed = parseBoundedImportJSON(raw, "HAR file");
   const entries = isObject(parsed) ? (parsed as HarArchive).log?.entries : undefined;
   if (!Array.isArray(entries)) {
     throw new Error("HAR file is missing log.entries");
   }
 
-  const requests = entries
-    .filter((entry) => shouldImportEntry(entry))
-    .map((entry, index) => entryToRequest(entry, index));
+  const requests: HarRequestImport[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!isObject(entry) || !shouldImportEntry(entry as HarEntry)) {
+      continue;
+    }
+    assertImportRequestCount(requests.length + 1, "HAR file");
+    requests.push(entryToRequest(entry as HarEntry, index));
+  }
   if (requests.length === 0) {
     throw new Error("HAR file has no importable HTTP API requests");
   }

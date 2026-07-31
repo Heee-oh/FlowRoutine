@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parseHarArchive } from "./harImport";
+import { MAX_IMPORT_JSON_DEPTH, MAX_IMPORT_REQUESTS } from "./importValidation";
 import { parsePostmanCollection } from "./postmanImport";
 
 describe("parseHarArchive", () => {
@@ -68,6 +69,22 @@ describe("parseHarArchive", () => {
     expect(() => parseHarArchive(JSON.stringify({ log: { entries: [] } }))).toThrow(
       "HAR file has no importable HTTP API requests",
     );
+  });
+
+  it("rejects archives above the request limit", () => {
+    const entries = Array.from({ length: MAX_IMPORT_REQUESTS + 1 }, (_, index) => ({
+      request: { method: "GET", url: `https://api.example.com/items/${index}` },
+      response: { content: { mimeType: "application/json" } },
+    }));
+
+    expect(() => parseHarArchive(JSON.stringify({ log: { entries } }))).toThrow(
+      `${MAX_IMPORT_REQUESTS}-request limit`,
+    );
+  });
+
+  it("rejects deeply nested input before parsing the archive", () => {
+    const raw = `${"[".repeat(MAX_IMPORT_JSON_DEPTH + 1)}0${"]".repeat(MAX_IMPORT_JSON_DEPTH + 1)}`;
+    expect(() => parseHarArchive(raw)).toThrow(`${MAX_IMPORT_JSON_DEPTH}-level nesting limit`);
   });
 });
 
@@ -149,6 +166,17 @@ describe("parsePostmanCollection", () => {
     expect(() => parsePostmanCollection("{}")).toThrow("Postman collection is missing an item array");
     expect(() => parsePostmanCollection(JSON.stringify({ item: [{ name: "folder" }] }))).toThrow(
       "Postman collection has no runnable HTTP requests",
+    );
+  });
+
+  it("rejects collections above the request limit", () => {
+    const item = Array.from({ length: MAX_IMPORT_REQUESTS + 1 }, (_, index) => ({
+      name: `Request ${index}`,
+      request: `https://api.example.com/items/${index}`,
+    }));
+
+    expect(() => parsePostmanCollection(JSON.stringify({ item }))).toThrow(
+      `${MAX_IMPORT_REQUESTS}-request limit`,
     );
   });
 });
