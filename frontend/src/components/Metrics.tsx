@@ -30,6 +30,11 @@ export const MetricGrid = memo(function MetricGrid() {
         <MetricDetail label="Refused" value={formatNumber(latest?.connRefused ?? 0)} />
         <MetricDetail label="Other" value={formatNumber(latest?.otherErrors ?? 0)} />
         <MetricDetail
+          label="Dropped"
+          value={formatNumber(latest?.droppedIterations ?? 0)}
+          title="Iterations not started because arrival-rate worker capacity was exhausted"
+        />
+        <MetricDetail
           label="Assertions"
           value={formatNumber(latest?.assertionsFailed ?? 0)}
           title={`Capture ${formatNumber(latest?.captureFailures ?? 0)} · Template ${formatNumber(latest?.templateFailures ?? 0)}`}
@@ -172,6 +177,7 @@ const StatusDetailsDialog = memo(function StatusDetailsDialog({
           <MetricDetail label="Total" value={formatNumber(total)} />
           <MetricDetail label="Success" value={formatNumber(batch?.success ?? 0)} />
           <MetricDetail label="Failed" value={formatNumber(batch?.failed ?? 0)} />
+          <MetricDetail label="Dropped" value={formatNumber(batch?.droppedIterations ?? 0)} />
         </div>
         {statusCodes.length === 0 ? (
           <div className="inspector-note">No HTTP responses yet</div>

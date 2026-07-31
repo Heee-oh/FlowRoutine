@@ -79,6 +79,7 @@ func TestBuildMetricsBatchUsesSnapshotDelta(t *testing.T) {
 			AssertionFailures: 7,
 			CaptureFailures:   2,
 			TemplateFailures:  3,
+			DroppedIterations: 9,
 			LatencySamples:    30,
 			TotalLatencyNano:  uint64(50 * time.Millisecond),
 			MinLatencyNano:    uint64(time.Millisecond),
@@ -108,6 +109,9 @@ func TestBuildMetricsBatchUsesSnapshotDelta(t *testing.T) {
 	}
 	if batch.AssertionsFailed != 7 || batch.CaptureFailures != 2 || batch.TemplateFailures != 3 {
 		t.Fatalf("unexpected assertion breakdown: %+v", batch)
+	}
+	if batch.DroppedIterations != 9 {
+		t.Fatalf("unexpected dropped iterations: %+v", batch)
 	}
 	if batch.LatencyPercentileErrorBoundPct != engine.LatencyHistogramRelativeErrorBound*100 {
 		t.Fatalf("unexpected latency percentile error bound: %f", batch.LatencyPercentileErrorBoundPct)

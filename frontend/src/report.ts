@@ -1,9 +1,9 @@
-import type { Header, MetricsBatch, QualityGate, ScenarioStep, StartRequest, StatusCodeCount } from "./types";
+import type { Header, LoadProfile, MetricsBatch, QualityGate, ScenarioStep, StartRequest, StatusCodeCount } from "./types";
 import type { MetricHistoryPoint } from "./metricHistory";
 import { redactHeaders, redactSensitiveURL } from "./secretSanitization";
 
 export type RunReport = {
-  schemaVersion: 5;
+  schemaVersion: 6;
   generatedAtUnixMs: number;
   run: {
     targetUrl: string;
@@ -37,6 +37,7 @@ type ReportConfig = {
   latencySampleRate: number;
   rateLimitRps: number;
   rampUpMs: number;
+  profile?: LoadProfile;
   batchIntervalMs: number;
   qualityGate: QualityGate;
   headers: Header[];
@@ -62,6 +63,7 @@ type ReportSummary = {
   failedRequests: number;
   successRate: number;
   failureRate: number;
+  droppedIterations: number;
   latencySamples: number;
   effectiveLatencySampleRate: number;
   latencyPercentileErrorBoundPct: number;
@@ -160,7 +162,7 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
   const averageRps = elapsedMs > 0 ? total / (elapsedMs / 1_000) : 0;
 
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     generatedAtUnixMs: Date.now(),
     run: {
       targetUrl: redactSensitiveURL(request.config.url),
@@ -181,6 +183,10 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
       latencySampleRate: request.config.latencySampleRate,
       rateLimitRps: request.config.rateLimitRps,
       rampUpMs: request.config.rampUpMs,
+      profile: request.config.profile ? {
+        ...request.config.profile,
+        stages: request.config.profile.stages.map((stage) => ({ ...stage })),
+      } : undefined,
       batchIntervalMs: request.batchIntervalMs,
       qualityGate,
       headers: redactHeaders(request.config.headers),
@@ -194,6 +200,7 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
       failedRequests: finalBatch.failed,
       successRate: ratio(finalBatch.success, total),
       failureRate: ratio(finalBatch.failed, total),
+      droppedIterations: finalBatch.droppedIterations ?? 0,
       latencySamples: runLatency.samples,
       effectiveLatencySampleRate: ratio(runLatency.samples, total),
       latencyPercentileErrorBoundPct: finalBatch.latencyPercentileErrorBoundPct,
@@ -575,6 +582,7 @@ function emptyBatch(): MetricsBatch {
     assertionsFailed: 0,
     captureFailures: 0,
     templateFailures: 0,
+    droppedIterations: 0,
     latencyPercentileErrorBoundPct: 2,
     intervalLatency: {
       samples: 0,

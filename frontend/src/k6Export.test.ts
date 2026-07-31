@@ -142,6 +142,69 @@ describe("buildK6Script", () => {
     expect(script).toContain("k6 applies rps independently per generator");
   });
 
+  it("maps explicit staged VU profiles to ramping-vus", () => {
+    const request = createRequest();
+    request.config.virtualUsers = 20;
+    request.config.durationMs = 4_000;
+    request.config.profile = {
+      mode: "ramping-vus",
+      startTarget: 0,
+      stages: [
+        { durationMs: 1_000, target: 10 },
+        { durationMs: 2_000, target: 20 },
+        { durationMs: 1_000, target: 0 },
+      ],
+      preAllocatedVUs: 0,
+      maxVUs: 0,
+      gracefulStopMs: 750,
+    };
+
+    const script = buildK6Script(request);
+
+    expect(script).toContain("executor: \"ramping-vus\"");
+    expect(script).toContain("startVUs: 0");
+    expect(script).toContain("{ duration: \"2s\", target: 20 }");
+    expect(script).toContain("gracefulRampDown: \"750ms\"");
+    expect(script).toContain("gracefulStop: \"750ms\"");
+  });
+
+  it("maps constant and ramping arrival-rate profiles to k6 capacity settings", () => {
+    const request = createRequest();
+    request.config.virtualUsers = 8;
+    request.config.durationMs = 2_000;
+    request.config.profile = {
+      mode: "constant-arrival-rate",
+      startTarget: 500,
+      stages: [{ durationMs: 2_000, target: 500 }],
+      preAllocatedVUs: 4,
+      maxVUs: 8,
+      gracefulStopMs: 1_000,
+    };
+
+    const constantScript = buildK6Script(request);
+    expect(constantScript).toContain("executor: \"constant-arrival-rate\"");
+    expect(constantScript).toContain("rate: 500");
+    expect(constantScript).toContain("preAllocatedVUs: 4");
+    expect(constantScript).toContain("maxVUs: 8");
+    expect(constantScript).not.toContain("\n  rps:");
+
+    request.config.durationMs = 3_000;
+    request.config.profile = {
+      ...request.config.profile,
+      mode: "ramping-arrival-rate",
+      startTarget: 100,
+      stages: [
+        { durationMs: 1_000, target: 500 },
+        { durationMs: 2_000, target: 1_000 },
+      ],
+    };
+    const rampingScript = buildK6Script(request);
+    expect(rampingScript).toContain("executor: \"ramping-arrival-rate\"");
+    expect(rampingScript).toContain("startRate: 100");
+    expect(rampingScript).toContain("{ duration: \"2s\", target: 1000 }");
+    expect(rampingScript).toContain("dropped_iterations");
+  });
+
   it("rejects configurations that cannot be represented safely", () => {
     const request = createRequest();
     request.config.durationMs = 0;

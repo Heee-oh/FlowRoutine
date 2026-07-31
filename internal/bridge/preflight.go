@@ -39,6 +39,7 @@ const (
 	MaxCapturePathBytes      = 1 << 10
 	MaxLatencySampleRate     = 1_000_000
 	MaxRateLimitRPS          = engine.MaxRateLimitRPS
+	MaxLoadStages            = engine.MaxLoadStages
 	MaxEstimatedConnections  = 50_000
 	WorkerMemoryOverhead     = 64 << 10
 )
@@ -59,16 +60,17 @@ type PreflightResponse struct {
 }
 
 type EffectiveLoadConfig struct {
-	VirtualUsers      int   `json:"virtualUsers"`
-	DurationMS        int64 `json:"durationMs"`
-	RequestTimeoutMS  int64 `json:"requestTimeoutMs"`
-	MaxConnsPerHost   int   `json:"maxConnsPerHost"`
-	ReadBufferSize    int   `json:"readBufferSize"`
-	WriteBufferSize   int   `json:"writeBufferSize"`
-	MaxResponseBytes  int   `json:"maxResponseBytes"`
-	LatencySampleRate int   `json:"latencySampleRate"`
-	RateLimitRPS      int   `json:"rateLimitRps"`
-	RampUpMS          int64 `json:"rampUpMs"`
+	VirtualUsers      int          `json:"virtualUsers"`
+	DurationMS        int64        `json:"durationMs"`
+	RequestTimeoutMS  int64        `json:"requestTimeoutMs"`
+	MaxConnsPerHost   int          `json:"maxConnsPerHost"`
+	ReadBufferSize    int          `json:"readBufferSize"`
+	WriteBufferSize   int          `json:"writeBufferSize"`
+	MaxResponseBytes  int          `json:"maxResponseBytes"`
+	LatencySampleRate int          `json:"latencySampleRate"`
+	RateLimitRPS      int          `json:"rateLimitRps"`
+	RampUpMS          int64        `json:"rampUpMs"`
+	Profile           *LoadProfile `json:"profile,omitempty"`
 }
 
 type PreflightEstimate struct {
@@ -146,6 +148,7 @@ func effectiveLoadConfig(config LoadConfig) EffectiveLoadConfig {
 		LatencySampleRate: config.LatencySampleRate,
 		RateLimitRPS:      config.RateLimitRPS,
 		RampUpMS:          config.RampUpMS,
+		Profile:           cloneLoadProfile(config.Profile),
 	}
 }
 
@@ -172,23 +175,36 @@ func normalizeLoadConfig(config LoadConfig) (LoadConfig, error) {
 		return LoadConfig{}, fmt.Errorf("body must be at most %d bytes", MaxRequestBodyBytes)
 	}
 
-	if config.VirtualUsers < 1 || config.VirtualUsers > MaxVirtualUsers {
-		return LoadConfig{}, fmt.Errorf("virtual users must be between 1 and %d", MaxVirtualUsers)
-	}
-	if config.DurationMS < MinDuration.Milliseconds() || config.DurationMS > MaxDuration.Milliseconds() {
-		return LoadConfig{}, fmt.Errorf(
-			"duration must be between %s and %s",
-			MinDuration,
-			MaxDuration,
-		)
-	}
 	if config.RequestTimeoutMS < 1 || config.RequestTimeoutMS > MaxRequestDelay.Milliseconds() {
 		return LoadConfig{}, fmt.Errorf(
 			"request timeout must be between 1ms and %s",
 			MaxRequestDelay,
 		)
 	}
-	if config.RampUpMS < 0 || config.RampUpMS > MaxRampUp.Milliseconds() {
+	if config.Profile != nil {
+		profile, maxWorkers, durationMS, err := normalizeLoadProfile(config.Profile, config.RequestTimeoutMS)
+		if err != nil {
+			return LoadConfig{}, err
+		}
+		next.Profile = profile
+		next.VirtualUsers = maxWorkers
+		next.DurationMS = durationMS
+		next.RampUpMS = 0
+		if isArrivalMode(profile.Mode) && config.RateLimitRPS != 0 {
+			return LoadConfig{}, errors.New("rate limit rps cannot be combined with an arrival-rate profile")
+		}
+	}
+	if next.VirtualUsers < 1 || next.VirtualUsers > MaxVirtualUsers {
+		return LoadConfig{}, fmt.Errorf("virtual users must be between 1 and %d", MaxVirtualUsers)
+	}
+	if next.DurationMS < MinDuration.Milliseconds() || next.DurationMS > MaxDuration.Milliseconds() {
+		return LoadConfig{}, fmt.Errorf(
+			"duration must be between %s and %s",
+			MinDuration,
+			MaxDuration,
+		)
+	}
+	if next.RampUpMS < 0 || next.RampUpMS > MaxRampUp.Milliseconds() {
 		return LoadConfig{}, fmt.Errorf("ramp-up must be between 0 and %s", MaxRampUp)
 	}
 
@@ -254,6 +270,124 @@ func normalizeLoadConfig(config LoadConfig) (LoadConfig, error) {
 		return LoadConfig{}, fmt.Errorf("scenario configuration: %w", err)
 	}
 	return next, nil
+}
+
+func normalizeLoadProfile(profile *LoadProfile, defaultGracefulStopMS int64) (*LoadProfile, int, int64, error) {
+	if profile == nil {
+		return nil, 0, 0, errors.New("load profile is required")
+	}
+	next := &LoadProfile{
+		Mode:            strings.ToLower(strings.TrimSpace(profile.Mode)),
+		StartTarget:     profile.StartTarget,
+		Stages:          append([]LoadStage(nil), profile.Stages...),
+		PreAllocatedVUs: profile.PreAllocatedVUs,
+		MaxVUs:          profile.MaxVUs,
+		GracefulStopMS:  profile.GracefulStopMS,
+	}
+	if len(next.Stages) < 1 || len(next.Stages) > MaxLoadStages {
+		return nil, 0, 0, fmt.Errorf("load profile must have between 1 and %d stages", MaxLoadStages)
+	}
+	if next.GracefulStopMS == 0 {
+		next.GracefulStopMS = defaultGracefulStopMS
+	}
+	if next.GracefulStopMS < 1 || next.GracefulStopMS > MaxRequestDelay.Milliseconds() {
+		return nil, 0, 0, fmt.Errorf("graceful stop must be between 1ms and %s", MaxRequestDelay)
+	}
+
+	maxTarget := next.StartTarget
+	positiveTarget := next.StartTarget > 0
+	var durationMS int64
+	for index, stage := range next.Stages {
+		if stage.DurationMS < MinDuration.Milliseconds() || stage.DurationMS > MaxDuration.Milliseconds() {
+			return nil, 0, 0, fmt.Errorf("load profile stage %d duration must be between %s and %s", index+1, MinDuration, MaxDuration)
+		}
+		if durationMS > MaxDuration.Milliseconds()-stage.DurationMS {
+			return nil, 0, 0, fmt.Errorf("load profile duration must be at most %s", MaxDuration)
+		}
+		durationMS += stage.DurationMS
+		maxTarget = max(maxTarget, stage.Target)
+		positiveTarget = positiveTarget || stage.Target > 0
+	}
+	if !positiveTarget {
+		return nil, 0, 0, errors.New("load profile must have a positive target")
+	}
+
+	switch engine.LoadMode(next.Mode) {
+	case engine.LoadModeConstantVUs:
+		if next.StartTarget < 1 || len(next.Stages) != 1 || next.Stages[0].Target != next.StartTarget {
+			return nil, 0, 0, errors.New("constant-vus requires one stage matching a positive start target")
+		}
+		if err := validateVUTargets(next); err != nil {
+			return nil, 0, 0, err
+		}
+		next.PreAllocatedVUs = 0
+		next.MaxVUs = 0
+	case engine.LoadModeRampingVUs:
+		if err := validateVUTargets(next); err != nil {
+			return nil, 0, 0, err
+		}
+		next.PreAllocatedVUs = 0
+		next.MaxVUs = 0
+	case engine.LoadModeConstantArrival:
+		if next.StartTarget < 1 || len(next.Stages) != 1 || next.Stages[0].Target != next.StartTarget {
+			return nil, 0, 0, errors.New("constant-arrival-rate requires one stage matching a positive start target")
+		}
+		if err := validateArrivalProfile(next); err != nil {
+			return nil, 0, 0, err
+		}
+		maxTarget = next.MaxVUs
+	case engine.LoadModeRampingArrival:
+		if err := validateArrivalProfile(next); err != nil {
+			return nil, 0, 0, err
+		}
+		maxTarget = next.MaxVUs
+	default:
+		return nil, 0, 0, fmt.Errorf("unsupported load profile mode %q", next.Mode)
+	}
+	return next, maxTarget, durationMS, nil
+}
+
+func validateVUTargets(profile *LoadProfile) error {
+	if profile.StartTarget < 0 || profile.StartTarget > MaxVirtualUsers {
+		return fmt.Errorf("load profile start target must be between 0 and %d", MaxVirtualUsers)
+	}
+	for index, stage := range profile.Stages {
+		if stage.Target < 0 || stage.Target > MaxVirtualUsers {
+			return fmt.Errorf("load profile stage %d target must be between 0 and %d", index+1, MaxVirtualUsers)
+		}
+	}
+	return nil
+}
+
+func validateArrivalProfile(profile *LoadProfile) error {
+	if profile.StartTarget < 0 || profile.StartTarget > MaxRateLimitRPS {
+		return fmt.Errorf("load profile start rate must be between 0 and %d", MaxRateLimitRPS)
+	}
+	for index, stage := range profile.Stages {
+		if stage.Target < 0 || stage.Target > MaxRateLimitRPS {
+			return fmt.Errorf("load profile stage %d rate must be between 0 and %d", index+1, MaxRateLimitRPS)
+		}
+	}
+	if profile.PreAllocatedVUs < 1 || profile.PreAllocatedVUs > MaxVirtualUsers {
+		return fmt.Errorf("pre-allocated virtual users must be between 1 and %d", MaxVirtualUsers)
+	}
+	if profile.MaxVUs < profile.PreAllocatedVUs || profile.MaxVUs > MaxVirtualUsers {
+		return fmt.Errorf("max virtual users must be between pre-allocated virtual users and %d", MaxVirtualUsers)
+	}
+	return nil
+}
+
+func isArrivalMode(mode string) bool {
+	return engine.LoadMode(mode) == engine.LoadModeConstantArrival || engine.LoadMode(mode) == engine.LoadModeRampingArrival
+}
+
+func cloneLoadProfile(profile *LoadProfile) *LoadProfile {
+	if profile == nil {
+		return nil
+	}
+	clone := *profile
+	clone.Stages = append([]LoadStage(nil), profile.Stages...)
+	return &clone
 }
 
 func normalizeScenarioSteps(steps []ScenarioStep, defaultMethod string) ([]ScenarioStep, error) {

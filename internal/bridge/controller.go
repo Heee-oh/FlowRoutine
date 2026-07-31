@@ -45,6 +45,20 @@ type Capture struct {
 	OnStatus string `json:"onStatus"`
 }
 
+type LoadStage struct {
+	DurationMS int64 `json:"durationMs"`
+	Target     int   `json:"target"`
+}
+
+type LoadProfile struct {
+	Mode            string      `json:"mode"`
+	StartTarget     int         `json:"startTarget"`
+	Stages          []LoadStage `json:"stages"`
+	PreAllocatedVUs int         `json:"preAllocatedVUs"`
+	MaxVUs          int         `json:"maxVUs"`
+	GracefulStopMS  int64       `json:"gracefulStopMs"`
+}
+
 type LoadConfig struct {
 	URL               string         `json:"url"`
 	Method            string         `json:"method"`
@@ -60,6 +74,7 @@ type LoadConfig struct {
 	LatencySampleRate int            `json:"latencySampleRate"`
 	RateLimitRPS      int            `json:"rateLimitRps"`
 	RampUpMS          int64          `json:"rampUpMs"`
+	Profile           *LoadProfile   `json:"profile,omitempty"`
 	ScenarioSteps     []ScenarioStep `json:"scenarioSteps"`
 }
 
@@ -77,6 +92,7 @@ type SnapshotResponse struct {
 	AssertionFailures uint64            `json:"assertionFailures"`
 	CaptureFailures   uint64            `json:"captureFailures"`
 	TemplateFailures  uint64            `json:"templateFailures"`
+	DroppedIterations uint64            `json:"droppedIterations"`
 	LatencySamples    uint64            `json:"latencySamples"`
 	TotalLatencyNano  uint64            `json:"totalLatencyNano"`
 	MinLatencyNano    uint64            `json:"minLatencyNano"`
@@ -316,6 +332,24 @@ func (c LoadConfig) toEngineConfig() engine.Config {
 			Captures:       captures,
 		})
 	}
+	var profile *engine.LoadProfile
+	if c.Profile != nil {
+		stages := make([]engine.LoadStage, 0, len(c.Profile.Stages))
+		for _, stage := range c.Profile.Stages {
+			stages = append(stages, engine.LoadStage{
+				Duration: time.Duration(stage.DurationMS) * time.Millisecond,
+				Target:   stage.Target,
+			})
+		}
+		profile = &engine.LoadProfile{
+			Mode:            engine.LoadMode(c.Profile.Mode),
+			StartTarget:     c.Profile.StartTarget,
+			Stages:          stages,
+			PreAllocatedVUs: c.Profile.PreAllocatedVUs,
+			MaxVUs:          c.Profile.MaxVUs,
+			GracefulStop:    time.Duration(c.Profile.GracefulStopMS) * time.Millisecond,
+		}
+	}
 
 	return engine.Config{
 		URL:               c.URL,
@@ -332,6 +366,7 @@ func (c LoadConfig) toEngineConfig() engine.Config {
 		LatencySampleRate: c.LatencySampleRate,
 		RateLimitRPS:      c.RateLimitRPS,
 		RampUp:            time.Duration(c.RampUpMS) * time.Millisecond,
+		Profile:           profile,
 		ScenarioSteps:     steps,
 	}
 }
@@ -351,6 +386,7 @@ func snapshotResponse(snapshot engine.Snapshot) SnapshotResponse {
 		AssertionFailures: snapshot.AssertionFailures,
 		CaptureFailures:   snapshot.CaptureFailures,
 		TemplateFailures:  snapshot.TemplateFailures,
+		DroppedIterations: snapshot.DroppedIterations,
 		LatencySamples:    snapshot.LatencySamples,
 		TotalLatencyNano:  snapshot.TotalLatencyNano,
 		MinLatencyNano:    snapshot.MinLatencyNano,

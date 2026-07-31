@@ -1,4 +1,5 @@
 import type { Edge, Node } from "@xyflow/react";
+import type { LoadProfile } from "./types";
 
 export type HeaderInputMode = "direct" | "form";
 
@@ -43,6 +44,7 @@ export type FlowNodeData = {
   maxResponseBytes?: number;
   rateLimitRps?: number;
   rampUpMs?: number;
+  loadProfile?: LoadProfile;
   batchIntervalMs?: number;
   latencySampleRate?: number;
   maxFailureRatePct?: number;

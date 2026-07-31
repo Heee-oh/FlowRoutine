@@ -5,6 +5,8 @@ import {
   sanitizeSensitiveURL,
   sanitizeStructuredBody,
 } from "./secretSanitization";
+import { isArrivalMode, legacyLoadProfile, normalizeLoadProfile } from "./loadProfile";
+import type { LoadProfile } from "./types";
 
 export function downloadK6Script(request: StartRequest) {
   const blob = new Blob([buildK6Script(request)], { type: "text/javascript" });
@@ -98,7 +100,12 @@ function renderParityNotes(request: StartRequest) {
       "//   k6 applies rps independently per generator in cloud or distributed runs.",
     );
   }
-  if (request.config.rampUpMs > 0 && request.config.virtualUsers > 1) {
+  if (request.config.profile) {
+    notes.push("// - The selected FlowRoutine execution profile maps directly to the equivalent k6 executor.");
+    if (isArrivalMode(request.config.profile.mode)) {
+      notes.push("// - FlowRoutine dropped iterations correspond to k6 dropped_iterations when max VU capacity is exhausted.");
+    }
+  } else if (request.config.rampUpMs > 0 && request.config.virtualUsers > 1) {
     notes.push("// - ramping-vus approximates FlowRoutine's discrete per-worker startup schedule.");
   } else if (request.config.rampUpMs > 0) {
     notes.push("// - Ramp-up is omitted because FlowRoutine starts its only VU immediately.");
@@ -108,47 +115,75 @@ function renderParityNotes(request: StartRequest) {
 }
 
 function renderExecutionOptions(request: StartRequest) {
-  const {
-    durationMs,
-    rampUpMs,
-    rateLimitRps,
-    requestTimeoutMs,
-    virtualUsers,
-  } = request.config;
+  const profile = executionProfile(request);
+  const { rateLimitRps } = request.config;
   const scenario = [
     "  scenarios: {",
     "    flowroutine: {",
   ];
-  if (rampUpMs > 0 && virtualUsers > 1) {
-    scenario.push(
-      "      executor: \"ramping-vus\",",
-      "      startVUs: 1,",
-      "      stages: [",
-      `        { duration: ${JSON.stringify(formatK6Duration(rampUpMs))}, target: ${virtualUsers} },`,
-    );
-    const steadyDurationMs = durationMs - rampUpMs;
-    if (steadyDurationMs > 0) {
+  switch (profile.mode) {
+    case "constant-vus":
       scenario.push(
-        `        { duration: ${JSON.stringify(formatK6Duration(steadyDurationMs))}, target: ${virtualUsers} },`,
+        "      executor: \"constant-vus\",",
+        `      vus: ${profile.startTarget},`,
+        `      duration: ${JSON.stringify(formatK6Duration(profile.stages[0].durationMs))},`,
       );
-    }
-    scenario.push("      ],");
-  } else {
-    scenario.push(
-      "      executor: \"constant-vus\",",
-      `      vus: ${virtualUsers},`,
-      `      duration: ${JSON.stringify(formatK6Duration(durationMs))},`,
-    );
+      break;
+    case "ramping-vus":
+      scenario.push(
+        "      executor: \"ramping-vus\",",
+        `      startVUs: ${profile.startTarget},`,
+        "      stages: [",
+        ...profile.stages.map((stage) =>
+          `        { duration: ${JSON.stringify(formatK6Duration(stage.durationMs))}, target: ${stage.target} },`),
+        "      ],",
+      );
+      if (request.config.profile) {
+        scenario.push(`      gracefulRampDown: ${JSON.stringify(formatK6Duration(profile.gracefulStopMs))},`);
+      }
+      break;
+    case "constant-arrival-rate":
+      scenario.push(
+        "      executor: \"constant-arrival-rate\",",
+        `      rate: ${profile.startTarget},`,
+        "      timeUnit: \"1s\",",
+        `      duration: ${JSON.stringify(formatK6Duration(profile.stages[0].durationMs))},`,
+        `      preAllocatedVUs: ${profile.preAllocatedVUs},`,
+        `      maxVUs: ${profile.maxVUs},`,
+      );
+      break;
+    case "ramping-arrival-rate":
+      scenario.push(
+        "      executor: \"ramping-arrival-rate\",",
+        `      startRate: ${profile.startTarget},`,
+        "      timeUnit: \"1s\",",
+        "      stages: [",
+        ...profile.stages.map((stage) =>
+          `        { duration: ${JSON.stringify(formatK6Duration(stage.durationMs))}, target: ${stage.target} },`),
+        "      ],",
+        `      preAllocatedVUs: ${profile.preAllocatedVUs},`,
+        `      maxVUs: ${profile.maxVUs},`,
+      );
+      break;
   }
   scenario.push(
-    `      gracefulStop: ${JSON.stringify(formatK6Duration(requestTimeoutMs))},`,
+    `      gracefulStop: ${JSON.stringify(formatK6Duration(profile.gracefulStopMs))},`,
     "    },",
     "  },",
   );
-  if (rateLimitRps > 0) {
+  if (!isArrivalMode(profile.mode) && rateLimitRps > 0) {
     scenario.push(`  rps: ${rateLimitRps},`);
   }
   return scenario;
+}
+
+function executionProfile(request: StartRequest): LoadProfile {
+  return normalizeLoadProfile(request.config.profile ?? legacyLoadProfile({
+    virtualUsers: request.config.virtualUsers,
+    durationMs: request.config.durationMs,
+    rampUpMs: request.config.rampUpMs,
+    requestTimeoutMs: request.config.requestTimeoutMs,
+  }));
 }
 
 function renderThresholds(gate: QualityGate | undefined) {
@@ -319,6 +354,10 @@ function validateK6Compatibility(request: StartRequest, steps: ScenarioStep[]) {
     throw new Error(
       `k6 export requires ramp-up (${rampUpMs}ms) to be no longer than duration (${durationMs}ms)`,
     );
+  }
+  const profile = executionProfile(request);
+  if (isArrivalMode(profile.mode) && rateLimitRps > 0) {
+    throw new Error("Rate limit RPS cannot be combined with an arrival-rate profile for k6 export");
   }
 
   let requestSteps = 0;

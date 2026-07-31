@@ -17,8 +17,17 @@ import {
   numberValue,
   toNumber,
 } from "../flowModel";
-import { formatSavedAt } from "../format";
+import { formatDuration, formatSavedAt } from "../format";
 import { collectSecretPlaceholderNames } from "../secretSanitization";
+import {
+  convertLoadProfileMode,
+  isArrivalMode,
+  isRampingMode,
+  legacyLoadProfile,
+  loadModeOptions,
+  loadProfileSummary,
+} from "../loadProfile";
+import type { LoadMode, LoadProfile } from "../types";
 
 export const NodeInspector = memo(function NodeInspector({
   selectedNode,
@@ -246,14 +255,7 @@ const NodeFields = memo(function NodeFields({
     case "engine":
       return (
         <>
-          <div className="field-grid">
-            <Field label="VUs">
-              <NumberInput value={node.data.virtualUsers ?? 1} min={1} max={100_000} onChange={(value) => updateNode({ virtualUsers: value })} />
-            </Field>
-            <Field label="Duration ms">
-              <NumberInput value={node.data.durationMs ?? 1} min={1} max={3_600_000} onChange={(value) => updateNode({ durationMs: value })} />
-            </Field>
-          </div>
+          <LoadProfileFields node={node} updateNode={updateNode} />
           <div className="field-grid">
             <Field label="Timeout ms">
               <NumberInput value={node.data.requestTimeoutMs ?? 1} min={1} max={300_000} onChange={(value) => updateNode({ requestTimeoutMs: value })} />
@@ -273,14 +275,15 @@ const NodeFields = memo(function NodeFields({
           <Field label="Max response bytes">
             <NumberInput value={node.data.maxResponseBytes ?? 1_048_576} min={1_024} max={67_108_864} onChange={(value) => updateNode({ maxResponseBytes: value })} />
           </Field>
-          <div className="field-grid">
-            <Field label="Rate limit RPS">
+          {!isArrivalMode(engineProfile(node.data).mode) ? (
+            <Field label="Request rate cap RPS">
               <NumberInput value={node.data.rateLimitRps ?? 0} min={0} max={10_000_000} onChange={(value) => updateNode({ rateLimitRps: value })} />
             </Field>
-            <Field label="Ramp-up ms">
-              <NumberInput value={node.data.rampUpMs ?? 0} min={0} max={3_600_000} onChange={(value) => updateNode({ rampUpMs: value })} />
-            </Field>
-          </div>
+          ) : (
+            <div className="inspector-note">
+              Arrival-rate scheduling controls iteration starts; the request-rate cap is disabled for this mode.
+            </div>
+          )}
         </>
       );
     case "assertion":
@@ -351,6 +354,174 @@ const NodeFields = memo(function NodeFields({
       );
   }
 });
+
+const LoadProfileFields = memo(function LoadProfileFields({
+  node,
+  updateNode,
+}: {
+  node: Node<FlowNodeData>;
+  updateNode: (patch: Partial<FlowNodeData>) => void;
+}) {
+  const profile = engineProfile(node.data);
+  const arrival = isArrivalMode(profile.mode);
+  const ramping = isRampingMode(profile.mode);
+  const targetLabel = arrival ? "Iterations / sec" : "Virtual users";
+  const targetMax = arrival ? 10_000_000 : 100_000;
+  const commit = (next: LoadProfile) => updateNode({ loadProfile: next });
+  const updateStage = (index: number, patch: Partial<LoadProfile["stages"][number]>) => {
+    const stages = profile.stages.map((stage, current) => current === index ? { ...stage, ...patch } : stage);
+    commit({ ...profile, stages });
+  };
+  const preview = profilePreview(profile);
+
+  return (
+    <div className="load-profile-editor">
+      <Field label="Execution mode">
+        <select
+          value={profile.mode}
+          onChange={(event) => commit(convertLoadProfileMode(profile, event.target.value as LoadMode))}
+        >
+          {loadModeOptions.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </Field>
+      <div className="field-grid">
+        <Field label={`Start ${targetLabel.toLowerCase()}`}>
+          <NumberInput
+            value={profile.startTarget}
+            min={ramping ? 0 : 1}
+            max={targetMax}
+            onChange={(value) => commit({
+              ...profile,
+              startTarget: value,
+              stages: ramping ? profile.stages : [{ ...profile.stages[0], target: value }],
+            })}
+          />
+        </Field>
+        <Field label="Graceful stop ms">
+          <NumberInput
+            value={profile.gracefulStopMs}
+            min={1}
+            max={300_000}
+            onChange={(value) => commit({ ...profile, gracefulStopMs: value })}
+          />
+        </Field>
+      </div>
+      {arrival ? (
+        <div className="field-grid">
+          <Field label="Pre-allocated VUs">
+            <NumberInput
+              value={profile.preAllocatedVUs}
+              min={1}
+              max={100_000}
+              onChange={(value) => commit({ ...profile, preAllocatedVUs: value })}
+            />
+          </Field>
+          <Field label="Max VUs">
+            <NumberInput
+              value={profile.maxVUs}
+              min={1}
+              max={100_000}
+              onChange={(value) => commit({ ...profile, maxVUs: value })}
+            />
+          </Field>
+        </div>
+      ) : null}
+      <div className="load-stage-heading">
+        <span>{ramping ? "Stages" : "Duration"}</span>
+        {ramping && profile.stages.length < 64 ? (
+          <button
+            type="button"
+            className="secondary load-stage-add"
+            onClick={() => commit({
+              ...profile,
+              stages: profile.stages.concat({
+                durationMs: 1_000,
+                target: profile.stages[profile.stages.length - 1]?.target ?? profile.startTarget,
+              }),
+            })}
+          >
+            <Plus size={14} /> Add stage
+          </button>
+        ) : null}
+      </div>
+      <div className="load-stage-list">
+        {profile.stages.map((stage, index) => (
+          <div className={`load-stage-row${ramping ? "" : " load-stage-row-single"}`} key={index}>
+            <Field label={ramping ? `Stage ${index + 1} ms` : "Duration ms"}>
+              <NumberInput
+                value={stage.durationMs}
+                min={1}
+                max={3_600_000}
+                onChange={(value) => updateStage(index, { durationMs: value })}
+              />
+            </Field>
+            {ramping ? (
+              <Field label={targetLabel}>
+                <NumberInput
+                  value={stage.target}
+                  min={0}
+                  max={targetMax}
+                  onChange={(value) => updateStage(index, { target: value })}
+                />
+              </Field>
+            ) : null}
+            {ramping && profile.stages.length > 1 ? (
+              <button
+                type="button"
+                className="secondary icon-button load-stage-delete"
+                aria-label={`Delete stage ${index + 1}`}
+                title={`Delete stage ${index + 1}`}
+                onClick={() => commit({
+                  ...profile,
+                  stages: profile.stages.filter((_, current) => current !== index),
+                })}
+              >
+                <Trash2 size={14} />
+              </button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <div className={`load-profile-preview${preview.error ? " load-profile-preview-error" : ""}`}>
+        <strong>Preview</strong>
+        <span>{preview.text}</span>
+      </div>
+    </div>
+  );
+});
+
+function engineProfile(data: FlowNodeData): LoadProfile {
+  return data.loadProfile ?? legacyLoadProfile({
+    virtualUsers: numberValue(data.virtualUsers, 128),
+    durationMs: numberValue(data.durationMs, 10_000),
+    rampUpMs: numberValue(data.rampUpMs, 1_000),
+    requestTimeoutMs: numberValue(data.requestTimeoutMs, 1_000),
+  });
+}
+
+function profilePreview(profile: LoadProfile) {
+  try {
+    const summary = loadProfileSummary(profile);
+    const points = [
+      `${summary.profile.startTarget} ${summary.targetUnit}`,
+      ...summary.profile.stages.map((stage) => `${stage.target} after ${formatDuration(stage.durationMs)}`),
+    ];
+    const capacity = isArrivalMode(summary.profile.mode)
+      ? ` · ${summary.profile.preAllocatedVUs}-${summary.profile.maxVUs} VUs`
+      : "";
+    return {
+      error: false,
+      text: `${points.join(" → ")} · total ${formatDuration(summary.durationMs)}${capacity}`,
+    };
+  } catch (error) {
+    return {
+      error: true,
+      text: error instanceof Error ? error.message : "Invalid load profile",
+    };
+  }
+}
 
 const SecretBindingFields = memo(function SecretBindingFields({
   node,

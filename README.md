@@ -23,7 +23,7 @@ Built with OpenAI Codex assistance.
 - **Visual scenario editing**: Build request, delay, assertion, engine, metrics, and chart-window nodes on a React Flow canvas.
 - **Postman/OpenAPI/HAR import**: Turn Postman Collection v2 JSON files, OpenAPI or Swagger JSON/YAML endpoints, or browser HAR captures into runnable scenario nodes.
 - **Stateful API flows**: Capture JSON response values and reuse them as `{{variables}}` in later request URLs, headers, or bodies.
-- **Local load engine**: Run virtual users locally with goroutines, `fasthttp`, keep-alive reuse, and pooled request/response objects.
+- **Local load engine**: Run staged virtual-user or arrival-rate profiles locally with goroutines, `fasthttp`, keep-alive reuse, and pooled request/response objects.
 - **Realtime feedback**: Track RPS, latency, failures, status code counts, and bounded live chart data through batched Wails events.
 - **Shareable local reports**: Export completed runs as redacted JSON reports with summary metrics, error breakdowns, status codes, and timeline points.
 - **SLO gates**: Configure failure-rate, latency, and RPS thresholds on the Metrics node and get pass/fail results locally or in exported k6 scripts.
@@ -55,8 +55,8 @@ go build ./...
 | Import | OpenAPI / Swagger JSON or YAML URL import, Postman Collection v2 JSON import, and browser HAR import |
 | Request setup | Method, URL, headers, body, auth helpers, JSON capture variables, and recent run loading |
 | Execution | Linear path execution from Request through Engine, with Delay and Assert support |
-| Engine | Go virtual users, RPS cap, ramp-up, timeouts, max connections, keep-alive reuse |
-| Metrics | RPS, total/success/failed counts, latency percentiles, transport failures, HTTP status breakdown |
+| Engine | Constant/ramping VUs, constant/ramping arrival rate, graceful stop, RPS cap, timeouts, max connections, keep-alive reuse |
+| Metrics | RPS, total/success/failed/dropped counts, latency percentiles, transport failures, HTTP status breakdown |
 | Reports | Completed-run JSON export with SLO pass/fail, local baseline comparison, redacted sensitive headers, and body-size metadata |
 | Interop | k6 JavaScript export with thresholds and sensitive headers mapped to environment variables |
 | UI | Node help, Korean/English descriptions, adjustable chart window, wheel zoom, edge deletion |
@@ -75,6 +75,14 @@ Global request limits use one central pacer per engine run across all scenario s
 a single-permit burst and issues one permit every `1 / RPS`; higher rates are emitted in bounded 1ms batches.
 Missed permits are not queued beyond one pacer tick. Saturated one-second tests allow ±20% scheduling
 tolerance; longer runs converge more closely.
+
+Execution profiles support constant VUs, ramping VU stages, constant arrival rate, and ramping arrival-rate
+stages. VU targets are reconciled every 10ms and ramp-down stops new iterations while allowing active iterations
+to finish within the configured graceful-stop window. After that window, context-aware work is cancelled; an
+in-flight HTTP transport remains bounded by the request timeout. Arrival-rate scheduling integrates the configured
+linear rate curve in 1ms buckets: by the profile deadline, attempted plus dropped iterations stays within one
+iteration of the floored curve integral. Scheduler or target saturation can widen
+instantaneous timing; work beyond `maxVUs` is counted as dropped instead of being queued and replayed later.
 
 OpenAPI imports require separate consent for private-network targets, HTTP redirects, and external `$ref`
 documents. Redirect and reference destinations reuse the same network policy. Imports are capped at 5 MiB
@@ -104,8 +112,10 @@ continue to use their compiled byte slices directly and retain the zero-allocati
 
 ### k6 export compatibility
 
-Exports map VUs, total duration, worker ramp-up, request timeouts, quality thresholds, captures, and status
-assertions. FlowRoutine's global request cap maps to k6's `rps` option so multi-request scenarios retain a
+Exports map all four execution profiles to k6's equivalent `constant-vus`, `ramping-vus`,
+`constant-arrival-rate`, or `ramping-arrival-rate` executor, including stages, worker capacity, graceful stop,
+request timeouts, quality thresholds, captures, and status assertions. FlowRoutine's global request cap maps to
+k6's `rps` option for VU profiles so multi-request scenarios retain a
 request-level limit; k6 [discourages this option](https://grafana.com/docs/k6/latest/using-k6/k6-options/reference/#rps)
 and applies it once per load generator, so distributed or cloud runs multiply the effective cap. k6 also
 samples every request and has no direct equivalent for FlowRoutine connection buffers or response-size limits.
