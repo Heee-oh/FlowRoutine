@@ -39,11 +39,11 @@ export const nodeHelpItems: Record<FlowNodeKind, HelpItem[]> = {
     helpItem("Delay ms", "Wait time in milliseconds when this node is on the Request through Engine path.", "이 node가 Request에서 Engine으로 가는 path에 있을 때 적용되는 wait time입니다."),
   ],
   metrics: [
-    helpItem("Batch ms", "How often the backend sends metric updates to the UI.", "Backend가 UI로 metrics updates를 보내는 주기입니다."),
+    helpItem("Batch ms", "How often the backend sends metric updates to the UI (100-5000 ms). Slower updates reduce overhead on long runs.", "Backend가 UI로 metrics updates를 보내는 주기(100-5000ms)입니다. 장기 실행에서는 느린 주기가 overhead를 줄입니다."),
     helpItem("Latency sample rate", "Records one latency sample every N requests per virtual user.", "Virtual user별로 N개 requests마다 latency sample 하나를 기록합니다."),
   ],
   window: [
-    helpItem("Window seconds", "How many seconds of realtime chart points are retained in the UI.", "Realtime chart points를 UI에 몇 초 동안 유지할지 설정합니다."),
+    helpItem("Window seconds", "How many seconds the bounded realtime chart covers. Extrema are retained while older detail is downsampled.", "제한된 realtime chart가 보여줄 시간 범위입니다. 최솟값과 최댓값은 유지하면서 오래된 세부 points를 downsample합니다."),
   ],
 };
 

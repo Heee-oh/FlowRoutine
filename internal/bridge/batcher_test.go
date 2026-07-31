@@ -47,8 +47,9 @@ func TestNormalizeInterval(t *testing.T) {
 	}{
 		{name: "default", in: 0, want: DefaultInterval},
 		{name: "min", in: time.Millisecond, want: MinInterval},
-		{name: "max", in: time.Second, want: MaxInterval},
+		{name: "max", in: 10 * time.Second, want: MaxInterval},
 		{name: "keep", in: 125 * time.Millisecond, want: 125 * time.Millisecond},
+		{name: "keep long", in: time.Second, want: time.Second},
 	}
 
 	for _, tt := range tests {

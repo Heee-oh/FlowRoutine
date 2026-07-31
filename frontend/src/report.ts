@@ -1,4 +1,5 @@
 import type { Header, MetricsBatch, QualityGate, ScenarioStep, StartRequest, StatusCodeCount } from "./types";
+import type { MetricHistoryPoint } from "./metricHistory";
 import { redactHeaders, redactSensitiveURL } from "./secretSanitization";
 
 export type RunReport = {
@@ -17,6 +18,12 @@ export type RunReport = {
   qualityGate: QualityGateResult;
   baseline: BaselineComparison;
   timeline: ReportTimelinePoint[];
+};
+
+export type RunReportMetrics = {
+  finalBatch: MetricsBatch | null;
+  timeline: readonly MetricHistoryPoint[];
+  batchCount: number;
 };
 
 type ReportConfig = {
@@ -134,13 +141,13 @@ const legacyBaselineStorageKeys = [
 ];
 const maxBaselines = 24;
 
-export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): RunReport {
-  const finalBatch = batches[batches.length - 1] ?? emptyBatch();
+export function buildRunReport(request: StartRequest, metrics: RunReportMetrics): RunReport {
+  const finalBatch = metrics.finalBatch ?? emptyBatch();
   const runLatency = finalBatch.runLatency;
   const qualityGate = normalizeQualityGate(request.qualityGate);
   const startedAtUnixMs = validTimestamp(finalBatch.startedAtUnixMs)
     ? finalBatch.startedAtUnixMs
-    : batches[0]?.timestampUnixMs ?? finalBatch.timestampUnixMs;
+    : metrics.timeline[0]?.timestampUnixMs ?? finalBatch.timestampUnixMs;
   const finishedAtUnixMs = finalBatch.timestampUnixMs;
   const elapsedMs = Math.max(0, finishedAtUnixMs - startedAtUnixMs);
   const total = finalBatch.total;
@@ -155,7 +162,7 @@ export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): 
       startedAtUnixMs,
       finishedAtUnixMs,
       elapsedMs,
-      batchCount: batches.length,
+      batchCount: metrics.batchCount,
     },
     config: {
       virtualUsers: request.config.virtualUsers,
@@ -216,14 +223,7 @@ export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): 
       previousRunUnixMs: null,
       deltas: null,
     },
-    timeline: batches.map((batch) => ({
-      timestampUnixMs: batch.timestampUnixMs,
-      rps: batch.rps,
-      total: batch.total,
-      failed: batch.failed,
-      p95LatencyMs: batch.intervalLatency.p95Ms,
-      p99LatencyMs: batch.intervalLatency.p99Ms,
-    })),
+    timeline: metrics.timeline.map((point) => ({ ...point })),
   };
 }
 

@@ -13,7 +13,7 @@ const (
 	MetricsBatchEvent = "metrics:batch"
 	DefaultInterval   = 150 * time.Millisecond
 	MinInterval       = 100 * time.Millisecond
-	MaxInterval       = 200 * time.Millisecond
+	MaxInterval       = 5 * time.Second
 )
 
 var ErrBatcherRunning = errors.New("metrics batcher is already running")

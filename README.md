@@ -65,6 +65,10 @@ Capture syntax is `name[@iteration|run][:success|any|2xx|200]=JSON.path`. Iterat
 virtual-user loop; run values keep the first successful value for that virtual user. JSON paths support
 dot segments and array indexes such as `$.items[0].token`. A missing value never sends an unresolved template.
 
+Metric summaries use the final cumulative engine snapshot and remain exact. Realtime charts retain at most
+2,048 lightweight points, while exported report timelines retain at most 1,000 points. Streaming downsampling
+preserves the first and last samples plus per-bucket RPS, P95, and P99 minimum and maximum excursions.
+
 ## Architecture
 
 ```text

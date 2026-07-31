@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { Activity, CheckCircle2, Download, Gauge, ListChecks, MinusCircle, Network, Timer, TrendingDown, TrendingUp, XCircle } from "lucide-react";
 import { downloadRunReport, type BaselineComparison, type QualityGateResult } from "../report";
 import { useMetricsStore } from "../store";
+import type { MetricHistoryPoint } from "../metricHistory";
 import type { MetricsBatch, StatusCodeCount } from "../types";
 import { formatBytes, formatNumber } from "../format";
 
@@ -258,7 +259,7 @@ function formatSignedPoints(value: number) {
   return `${sign}${formatNumber(value, 2)}pp`;
 }
 
-function drawChart(canvas: HTMLCanvasElement, points: MetricsBatch[]) {
+function drawChart(canvas: HTMLCanvasElement, points: MetricHistoryPoint[]) {
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   const width = Math.max(1, Math.floor(rect.width * dpr));
@@ -305,7 +306,7 @@ function drawChart(canvas: HTMLCanvasElement, points: MetricsBatch[]) {
   const lastTs = points[points.length - 1].timestampUnixMs;
   const span = Math.max(1, lastTs - firstTs);
   const maxRps = niceMax(Math.max(1, ...points.map((point) => point.rps || 0)));
-  const maxLatency = niceMax(Math.max(1, ...points.map((point) => point.intervalLatency.p99Ms || point.intervalLatency.avgMs || 0)));
+  const maxLatency = niceMax(Math.max(1, ...points.map((point) => point.p99LatencyMs || 0)));
 
   drawSeries(ctx, points, "rps", firstTs, span, maxRps, "#39d0a3", padding, chartWidth, chartHeight, true);
   drawSeries(ctx, points, "latency", firstTs, span, maxLatency, "#5aa9ff", padding, chartWidth, chartHeight, false);
@@ -320,7 +321,7 @@ function drawChart(canvas: HTMLCanvasElement, points: MetricsBatch[]) {
 
 function drawSeries(
   ctx: CanvasRenderingContext2D,
-  points: MetricsBatch[],
+  points: MetricHistoryPoint[],
   key: "rps" | "latency",
   firstTs: number,
   span: number,
@@ -336,7 +337,7 @@ function drawSeries(
   ctx.beginPath();
   points.forEach((point, index) => {
     const x = padding.left + ((point.timestampUnixMs - firstTs) / span) * chartWidth;
-    const rawValue = key === "rps" ? point.rps : point.intervalLatency.p99Ms;
+    const rawValue = key === "rps" ? point.rps : point.p99LatencyMs;
     const normalized = logScale ? logNormalize(rawValue, maxValue) : Math.min(1, rawValue / maxValue);
     const y = padding.top + chartHeight - normalized * chartHeight;
     if (index === 0) {

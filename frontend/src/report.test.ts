@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { metricHistoryPoint } from "./metricHistory";
 import { applyBaselineComparison, buildRunReport, purgeLegacyRunBaselines } from "./report";
 import type { MetricsBatch, StartRequest } from "./types";
 
@@ -72,8 +73,14 @@ describe("buildRunReport", () => {
       statusCodes: [{ code: 200, count: 100 }],
     };
 
-    const report = buildRunReport(request, [finalBatch]);
+    const report = buildRunReport(request, {
+      finalBatch,
+      timeline: [metricHistoryPoint({ ...finalBatch, total: 1 })],
+      batchCount: 36_000,
+    });
 
+    expect(report.run.batchCount).toBe(36_000);
+    expect(report.summary.totalRequests).toBe(100);
     expect(report.summary.latencySamples).toBe(100);
     expect(report.summary.latencyMs).toEqual({
       avg: 900.1,
@@ -110,7 +117,7 @@ describe("buildRunReport", () => {
       }],
     }];
 
-    const report = buildRunReport(request, []);
+    const report = buildRunReport(request, reportMetrics([]));
     const serialized = JSON.stringify(report);
     const otherSecrets = structuredClone(request);
     otherSecrets.config.url = "https://bob:other@example.com/items?access_token=different";
@@ -127,7 +134,7 @@ describe("buildRunReport", () => {
       scope: "run",
       onStatus: "2xx",
     }]);
-    expect(buildRunReport(otherSecrets, []).baseline.key).toBe(report.baseline.key);
+    expect(buildRunReport(otherSecrets, reportMetrics([])).baseline.key).toBe(report.baseline.key);
   });
 
   it("purges legacy baselines that may contain raw signed URLs", () => {
@@ -154,7 +161,7 @@ describe("buildRunReport", () => {
     const request = createRequest();
     request.config.url = "https://example.com?access_token=stored-url-secret";
 
-    applyBaselineComparison(buildRunReport(request, []), request);
+    applyBaselineComparison(buildRunReport(request, reportMetrics([])), request);
     const persisted = Array.from(values.values()).join("\n");
 
     expect(values.has("flowroutine:run-baselines:v2")).toBe(false);
@@ -184,5 +191,13 @@ function createRequest(): StartRequest {
       scenarioSteps: [],
     },
     batchIntervalMs: 1_000,
+  };
+}
+
+function reportMetrics(batches: MetricsBatch[]) {
+  return {
+    finalBatch: batches[batches.length - 1] ?? null,
+    timeline: batches.map(metricHistoryPoint),
+    batchCount: batches.length,
   };
 }
