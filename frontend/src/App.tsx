@@ -30,10 +30,17 @@ import {
   saveScenario,
 } from "./flowModel";
 import type { FlowNodeData, FlowNodeKind, RuntimeAuthSecret, SafetyAssessment, SavedScenario } from "./flowTypes";
+import { parseHarArchive } from "./harImport";
 import type { HelpLanguage, HelpTopic } from "./help";
+import { parsePostmanCollection } from "./postmanImport";
 import { DEFAULT_METRIC_WINDOW_MS, useLoadStore, useMetricsStore } from "./store";
 import type { OpenAPIEndpoint, OpenAPIImportResponse, StartRequest } from "./types";
 import { importOpenAPI, onMetricsBatch, startLoad, stopLoad } from "./wails";
+
+type ImportedRequest = {
+  name: string;
+  settings: Partial<FlowNodeData>;
+};
 
 export function App() {
   const running = useLoadStore((state) => state.running);
@@ -291,6 +298,64 @@ export function App() {
     setOpenAPIImported(null);
   }, [handleDeleteNode, openAPIImported, setFlowNodes]);
 
+  const replaceGraphWithImportedRequests = useCallback((importedRequests: ImportedRequest[]) => {
+    const requestNodes = importedRequests.map((item, index) => {
+      const node = createFlowNode(
+        "request",
+        index,
+        item.settings,
+        { x: 20 + index * 240, y: 80 },
+        handleDeleteNode,
+      );
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          label: item.name.slice(0, 42) || "Request",
+        },
+      };
+    });
+    const engineIndex = requestNodes.length;
+    const metricsIndex = engineIndex + 1;
+    const windowIndex = engineIndex + 2;
+    const engineNode = createFlowNode("engine", engineIndex, null, { x: 20 + engineIndex * 240, y: 80 }, handleDeleteNode);
+    const metricsNode = createFlowNode("metrics", metricsIndex, null, { x: 20 + metricsIndex * 240, y: 80 }, handleDeleteNode);
+    const windowNode = createFlowNode("window", windowIndex, null, { x: 20 + metricsIndex * 240, y: 215 }, handleDeleteNode);
+    const edges: Edge[] = requestNodes.map((node, index) => ({
+      id: index === requestNodes.length - 1 ? `${node.id}-${engineNode.id}` : `${node.id}-${requestNodes[index + 1].id}`,
+      source: node.id,
+      target: index === requestNodes.length - 1 ? engineNode.id : requestNodes[index + 1].id,
+    }));
+    edges.push(
+      { id: `${engineNode.id}-${metricsNode.id}`, source: engineNode.id, target: metricsNode.id },
+      { id: `${metricsNode.id}-${windowNode.id}`, source: metricsNode.id, target: windowNode.id },
+    );
+    const nodes = requestNodes.concat(engineNode, metricsNode, windowNode);
+    setFlowNodes(nodes);
+    setFlowEdges(edges);
+    setSelectedNodeId(requestNodes[0]?.id ?? null);
+    setAuthSecrets({});
+    nextNodeIndex.current = nodes.length;
+  }, [handleDeleteNode, setFlowEdges, setFlowNodes]);
+
+  const handleImportPostmanFile = useCallback(async (file: File) => {
+    try {
+      setError("");
+      replaceGraphWithImportedRequests(parsePostmanCollection(await file.text()));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to import Postman collection");
+    }
+  }, [replaceGraphWithImportedRequests, setError]);
+
+  const handleImportHarFile = useCallback(async (file: File) => {
+    try {
+      setError("");
+      replaceGraphWithImportedRequests(parseHarArchive(await file.text()));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to import HAR file");
+    }
+  }, [replaceGraphWithImportedRequests, setError]);
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -339,7 +404,12 @@ export function App() {
           </div>
         </header>
 
-        <NodePalette onAddNode={handleAddNode} onOpenImport={handleOpenOpenAPIImport} />
+        <NodePalette
+          onAddNode={handleAddNode}
+          onOpenImport={handleOpenOpenAPIImport}
+          onImportHar={handleImportHarFile}
+          onImportPostman={handleImportPostmanFile}
+        />
 
         <FlowCanvas
           nodes={flowNodes}

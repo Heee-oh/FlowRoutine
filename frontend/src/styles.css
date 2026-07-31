@@ -411,6 +411,10 @@ button:disabled {
   color: #cfe5ff;
 }
 
+.hidden-file-input {
+  display: none;
+}
+
 .flow-shell {
   overflow: hidden;
   border: 1px solid var(--line);
