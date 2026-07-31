@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { preflightLoad } from "./wails";
-import type { PreflightResponse, StartRequest } from "./types";
+import { importOpenAPI, preflightLoad } from "./wails";
+import type {
+  OpenAPIImportRequest,
+  OpenAPIImportResponse,
+  PreflightResponse,
+  StartRequest,
+} from "./types";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -72,5 +77,38 @@ describe("preflightLoad", () => {
       config: request.config,
       batchIntervalMs: request.batchIntervalMs,
     });
+  });
+});
+
+describe("importOpenAPI", () => {
+  it("forwards explicit network consent without adding document payloads", async () => {
+    const request: OpenAPIImportRequest = {
+      url: "http://localhost:8080/openapi.yaml",
+      allowPrivateNetwork: true,
+      allowRedirects: false,
+      allowExternalRefs: true,
+    };
+    const response: OpenAPIImportResponse = {
+      sourceUrl: request.url,
+      openapi: "3.1.0",
+      title: "Demo",
+      version: "1.0.0",
+      servers: [],
+      endpoints: [],
+    };
+    const bridge = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal("window", {
+      go: {
+        main: {
+          App: {
+            ImportOpenAPI: bridge,
+          },
+        },
+      },
+    });
+
+    await expect(importOpenAPI(request)).resolves.toEqual(response);
+    expect(bridge).toHaveBeenCalledWith(request);
+    expect(response).not.toHaveProperty("rawJson");
   });
 });

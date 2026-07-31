@@ -36,7 +36,12 @@ import { downloadK6Script } from "./k6Export";
 import { parsePostmanCollection } from "./postmanImport";
 import { purgeLegacyRunBaselines } from "./report";
 import { DEFAULT_METRIC_WINDOW_MS, useLoadStore, useMetricsStore } from "./store";
-import type { OpenAPIEndpoint, OpenAPIImportResponse, StartRequest } from "./types";
+import type {
+  OpenAPIEndpoint,
+  OpenAPIImportRequest,
+  OpenAPIImportResponse,
+  StartRequest,
+} from "./types";
 import { importOpenAPI, onMetricsBatch, preflightLoad, startLoad, stopLoad } from "./wails";
 
 type ImportedRequest = {
@@ -288,13 +293,13 @@ export function App() {
     }
   }, [openAPIImportLoading]);
 
-  const handleSubmitOpenAPIImport = useCallback(async (url: string) => {
+  const handleSubmitOpenAPIImport = useCallback(async (request: OpenAPIImportRequest) => {
     setOpenAPIImportLoading(true);
     setOpenAPIImportError("");
     setOpenAPIImportMessage("");
     setOpenAPIImported(null);
     try {
-      const imported = await importOpenAPI(url);
+      const imported = await importOpenAPI(request);
       setOpenAPIImported(imported);
       setOpenAPIImportMessage(`Loaded ${imported.title || "OpenAPI document"} (${imported.openapi}) with ${imported.endpoints.length} endpoints`);
     } catch (err) {

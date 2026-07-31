@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	github.com/valyala/fasthttp v1.68.0
 	github.com/wailsapp/wails/v2 v2.12.0
+	go.yaml.in/yaml/v3 v3.0.4
 )
 
 require (

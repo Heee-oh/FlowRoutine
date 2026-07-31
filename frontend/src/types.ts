@@ -137,7 +137,13 @@ export type OpenAPIImportResponse = {
   version: string;
   servers: OpenAPIServer[];
   endpoints: OpenAPIEndpoint[];
-  rawJson: unknown;
+};
+
+export type OpenAPIImportRequest = {
+  url: string;
+  allowPrivateNetwork: boolean;
+  allowRedirects: boolean;
+  allowExternalRefs: boolean;
 };
 
 export type OpenAPIServer = {
@@ -179,7 +185,7 @@ declare global {
           StartLoad?: (request: StartRequest) => Promise<StartResponse>;
           PreflightLoad?: (request: StartRequest) => Promise<PreflightResponse>;
           StopLoad?: () => Promise<void>;
-          ImportOpenAPI?: (url: string) => Promise<OpenAPIImportResponse>;
+          ImportOpenAPI?: (request: OpenAPIImportRequest) => Promise<OpenAPIImportResponse>;
         };
       };
     };
