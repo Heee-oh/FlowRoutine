@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -36,11 +39,17 @@ jobs:
       - name: Install frontend dependencies
         run: npm --prefix frontend ci
 
+      - name: Run frontend tests
+        run: npm --prefix frontend test
+
       - name: Build frontend assets
         run: npm --prefix frontend run build:wails
 
-      - name: Run Go tests
-        run: go test ./...
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Run Go tests with race detector
+        run: go test -race -count=1 ./...
 
       - name: Build Go packages
         run: go build ./...
