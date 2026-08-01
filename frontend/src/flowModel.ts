@@ -10,12 +10,9 @@ import {
 } from "./environmentProfiles";
 import {
   resolveSecretPlaceholders,
-  sanitizeHeaderRows,
-  sanitizeHeaderText,
   sanitizeSensitiveURL,
-  sanitizeStructuredBody,
 } from "./secretSanitization";
-import type { AssertionDefinition, Capture, Header, LoadConfig, OpenAPIEndpoint, PreflightResponse, ScenarioStep, StartRequest } from "./types";
+import type { AssertionDefinition, Capture, Header, ScenarioStep, StartRequest } from "./types";
 import type {
   FlowNodeData,
   FlowNodeKind,
@@ -23,10 +20,10 @@ import type {
   HeaderRow,
   RuntimeEnvironment,
   RuntimeAuthSecret,
-  SafetyAssessment,
-  SavedScenario,
-  TargetProfile,
 } from "./flowTypes";
+
+export { assessStartSafety, classifyTarget } from "./loadSafety";
+export { openAPIEndpointToRequestSettings } from "./openAPIFlow";
 
 export const nodePalette: Array<{ kind: FlowNodeKind; label: string }> = [
   { kind: "request", label: "Request" },
@@ -86,17 +83,6 @@ export function createFlowNode(
     position: position ?? { x: 40 + (index % 4) * 220, y: 60 + Math.floor(index / 4) * 130 },
     data,
   });
-}
-
-export function openAPIEndpointToRequestSettings(endpoint: OpenAPIEndpoint, sourceURL: string): Partial<FlowNodeData> {
-  const method = endpoint.method.toUpperCase();
-  return {
-    url: sanitizeSensitiveURL(openAPIEndpointURL(endpoint, sourceURL)),
-    method,
-    headersText: openAPIHeadersText(method),
-    ...openAPIAuthSettings(endpoint),
-    body: sanitizeStructuredBody(endpoint.bodySample),
-  };
 }
 
 export function getHost(url: string) {
@@ -287,116 +273,6 @@ function qualityGateFromMetricsNode(metricsNode: Node<FlowNodeData> | undefined)
   };
 }
 
-export type ScenarioSnapshotMetadata = {
-  id?: string;
-  name?: string;
-  tags?: string[];
-  createdAtUnixMs?: number;
-  environmentProfileId?: string;
-};
-
-export function createSavedScenario(
-  nodes: Node<FlowNodeData>[],
-  edges: Edge[],
-  request: StartRequest,
-  environmentProfileId?: string,
-  metadata?: ScenarioSnapshotMetadata,
-): SavedScenario {
-  const method = request.config.method || "GET";
-  const target = persistedTargetName(request.config.url);
-  return createScenarioSnapshot(nodes, edges, {
-    ...metadata,
-    name: metadata?.name?.trim() || `${method} ${target}`,
-    environmentProfileId: environmentProfileId ?? metadata?.environmentProfileId,
-  });
-}
-
-export function createScenarioSnapshot(
-  nodes: Node<FlowNodeData>[],
-  edges: Edge[],
-  metadata: ScenarioSnapshotMetadata = {},
-): SavedScenario {
-  const now = Date.now();
-  return sanitizeSavedScenario({
-    schemaVersion: 2,
-    id: metadata.id?.trim() || newScenarioID(now),
-    name: metadata.name?.trim() || "Untitled scenario",
-    tags: metadata.tags ?? [],
-    createdAtUnixMs: metadata.createdAtUnixMs ?? now,
-    updatedAtUnixMs: now,
-    ...(metadata.environmentProfileId ? { environmentProfileId: metadata.environmentProfileId } : {}),
-    nodes: nodes.map(stripRuntimeNode),
-    edges: edges.map(stripRuntimeEdge),
-  });
-}
-
-export function reviveSavedNodes(nodes: Node<FlowNodeData>[], onDelete: (id: string) => void) {
-  return nodes.map((node) => refreshNodeDisplay({
-    ...node,
-    data: {
-      ...node.data,
-      onDelete,
-    },
-  }));
-}
-
-export function nextNodeIndexFromNodes(nodes: Node<FlowNodeData>[]) {
-  return nodes.reduce((maxIndex, node) => {
-    const splitAt = node.id.lastIndexOf("-");
-    const index = splitAt >= 0 ? Number(node.id.slice(splitAt + 1)) : Number.NaN;
-    return Number.isInteger(index) ? Math.max(maxIndex, index + 1) : maxIndex;
-  }, nodes.length);
-}
-
-export function assessStartSafety(config: LoadConfig, preflight?: PreflightResponse): SafetyAssessment {
-  const target = classifyTarget(config.url);
-  const warnings: string[] = [];
-  if (target.tone === "public") {
-    warnings.push("Public target traffic leaves this machine.");
-  }
-  if (target.tone === "invalid") {
-    warnings.push("Target URL is invalid.");
-  }
-  if (config.rateLimitRps === 0) {
-    warnings.push("RPS is unlimited.");
-  }
-  if (config.durationMs > 300_000) {
-    warnings.push("Run duration is longer than 5 minutes.");
-  }
-  if (config.virtualUsers >= 1_000) {
-    warnings.push("Virtual users are set to 1,000 or more.");
-  }
-  if (preflight) {
-    warnings.push(...preflight.warnings.map((warning) => warning.message));
-  }
-  const uniqueWarnings = Array.from(new Set(warnings));
-
-  return {
-    target,
-    warnings: uniqueWarnings,
-    confirmationRequired: uniqueWarnings.length > 0,
-    estimatedMemoryBytes: preflight?.estimate.memoryBytes ?? 0,
-    estimatedConnections: preflight?.estimate.connections ?? 0,
-    targetHosts: preflight?.estimate.targetHosts ?? 0,
-  };
-}
-
-export function classifyTarget(rawUrl: string): TargetProfile {
-  try {
-    const url = new URL(rawUrl);
-    const host = url.hostname.toLowerCase();
-    if (isLocalHost(host)) {
-      return { label: "Localhost", tone: "local", host: url.host };
-    }
-    if (isPrivateHost(host)) {
-      return { label: "Private", tone: "private", host: url.host };
-    }
-    return { label: "Public", tone: "public", host: url.host };
-  } catch {
-    return { label: "Invalid", tone: "invalid", host: rawUrl || "No target" };
-  }
-}
-
 export function toNumber(value: string, fallback: number) {
   const next = Number(value);
   return Number.isFinite(next) ? next : fallback;
@@ -536,72 +412,6 @@ function nodeTemplate(kind: FlowNodeKind, settings: Partial<FlowNodeData> | null
         tone: "window",
         windowMs: DEFAULT_METRIC_WINDOW_MS,
       };
-  }
-}
-
-function openAPIEndpointURL(endpoint: OpenAPIEndpoint, sourceURL: string) {
-  const serverURL = endpoint.serverUrl || sourceURL;
-  const path = openAPIPathWithSamples(endpoint);
-  try {
-    const base = new URL(serverURL, sourceURL);
-    const url = new URL(path.replace(/^\/+/, ""), normalizedBaseURL(base));
-    for (const parameter of endpoint.parameters ?? []) {
-      if (parameter.in === "query" && parameter.name) {
-        url.searchParams.set(parameter.name, parameter.sample || "string");
-      }
-    }
-    return url.toString();
-  } catch {
-    const query = openAPIQueryString(endpoint);
-    return `${serverURL.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}${query}`;
-  }
-}
-
-function openAPIPathWithSamples(endpoint: OpenAPIEndpoint) {
-  const pathParameters = new Map(
-    (endpoint.parameters ?? [])
-      .filter((parameter) => parameter.in === "path")
-      .map((parameter) => [parameter.name, parameter.sample || "1"]),
-  );
-  return endpoint.path.replace(/\{([^}]+)\}/g, (_match, name: string) => encodeURIComponent(pathParameters.get(name) ?? "1"));
-}
-
-function openAPIQueryString(endpoint: OpenAPIEndpoint) {
-  const params = new URLSearchParams();
-  for (const parameter of endpoint.parameters ?? []) {
-    if (parameter.in === "query" && parameter.name) {
-      params.set(parameter.name, parameter.sample || "string");
-    }
-  }
-  const query = params.toString();
-  return query ? `?${query}` : "";
-}
-
-function normalizedBaseURL(url: URL) {
-  if (!url.pathname.endsWith("/")) {
-    url.pathname = `${url.pathname}/`;
-  }
-  return url;
-}
-
-function openAPIHeadersText(method: string) {
-  const headers = ["Accept: application/json"];
-  if (method !== "GET" && method !== "HEAD") {
-    headers.push("Content-Type: application/json");
-  }
-  return headers.join("\n");
-}
-
-function openAPIAuthSettings(endpoint: OpenAPIEndpoint): Partial<FlowNodeData> {
-  switch (endpoint.auth.type) {
-    case "bearer":
-      return { authType: "bearer" };
-    case "apiKey":
-      return { authType: "apiKey", authApiKeyName: endpoint.auth.name || "X-Api-Key" };
-    case "cookie":
-      return { authType: "cookie", authCookieName: endpoint.auth.name || "session" };
-    default:
-      return { authType: "none" };
   }
 }
 
@@ -898,63 +708,6 @@ function parseHeaderText(raw: string): Header[] {
     });
 }
 
-export function stripRuntimeNode(node: Node<FlowNodeData>): Node<FlowNodeData> {
-  const {
-    executionOrder: _executionOrder,
-    onDelete: _onDelete,
-    validationError: _validationError,
-    ...data
-  } = node.data;
-  return {
-    id: node.id,
-    type: node.type,
-    position: node.position,
-    data: stripSecretFields(data),
-  };
-}
-
-function stripSecretFields(data: FlowNodeData): FlowNodeData {
-  const {
-    token: _token,
-    cookieValue: _cookieValue,
-    apiKeyValue: _apiKeyValue,
-    ...safeData
-  } = data;
-  const sanitized: FlowNodeData = { ...safeData };
-  sanitized.label = sanitizeSensitiveURL(sanitized.label);
-  sanitized.caption = sanitizeSensitiveURL(sanitized.caption);
-  if (typeof sanitized.url === "string") {
-    sanitized.url = sanitizeSensitiveURL(sanitized.url);
-  }
-  if (typeof sanitized.headersText === "string") {
-    sanitized.headersText = sanitizeHeaderText(sanitized.headersText);
-  }
-  if (Array.isArray(sanitized.headerRows)) {
-    sanitized.headerRows = sanitizeHeaderRows(sanitized.headerRows.filter(isHeaderRow));
-  }
-  if (typeof sanitized.body === "string") {
-    sanitized.body = sanitizeStructuredBody(sanitized.body);
-  }
-  return sanitized;
-}
-
-export function sanitizeSavedScenario(scenario: SavedScenario): SavedScenario {
-  const environmentProfileId = typeof scenario.environmentProfileId === "string"
-    ? scenario.environmentProfileId.trim()
-    : "";
-  return {
-    schemaVersion: 2,
-    id: scenario.id,
-    name: sanitizeSensitiveURL(scenario.name),
-    tags: scenario.tags.slice(),
-    createdAtUnixMs: scenario.createdAtUnixMs,
-    updatedAtUnixMs: scenario.updatedAtUnixMs,
-    ...(environmentProfileId ? { environmentProfileId } : {}),
-    nodes: scenario.nodes.map(stripRuntimeNode),
-    edges: scenario.edges.map(stripRuntimeEdge),
-  };
-}
-
 function resolveNodeTemplates(
   node: Node<FlowNodeData>,
   value: string,
@@ -1013,48 +766,9 @@ function collectRuntimeSecretValues(
   return Array.from(values).sort((left, right) => right.length - left.length);
 }
 
-export function stripRuntimeEdge(edge: Edge): Edge {
-  return {
-    id: edge.id,
-    source: edge.source,
-    target: edge.target,
-    sourceHandle: edge.sourceHandle,
-    targetHandle: edge.targetHandle,
-  };
-}
-
 function isHeaderRow(value: unknown): value is HeaderRow {
   return Boolean(value) &&
     typeof value === "object" &&
     typeof (value as HeaderRow).name === "string" &&
     typeof (value as HeaderRow).value === "string";
-}
-
-function newScenarioID(now: number) {
-  return typeof globalThis.crypto?.randomUUID === "function"
-    ? `scenario-${globalThis.crypto.randomUUID()}`
-    : `scenario-${now}`;
-}
-
-function isLocalHost(host: string) {
-  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".localhost");
-}
-
-function persistedTargetName(rawURL: string) {
-  try {
-    return new URL(rawURL).host || "target";
-  } catch {
-    return "custom target";
-  }
-}
-
-function isPrivateHost(host: string) {
-  const parts = host.split(".").map((part) => Number(part));
-  if (parts.length === 4 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
-    return parts[0] === 10 ||
-      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
-      (parts[0] === 192 && parts[1] === 168) ||
-      (parts[0] === 169 && parts[1] === 254);
-  }
-  return host.endsWith(".local") || host.startsWith("fc") || host.startsWith("fd");
 }

@@ -9,6 +9,7 @@
     "test": "vitest run",
     "preview": "vite preview --host 127.0.0.1",
     "sync:cmd-dist": "node scripts/sync-cmd-dist.mjs",
+    "check:cmd-dist": "node scripts/sync-cmd-dist.mjs --check",
     "build:wails": "npm run build && npm run sync:cmd-dist"
   },
   "dependencies": {

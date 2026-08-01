@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createFlowNode, createScenarioSnapshot, initialFlowEdges, initialFlowNodes } from "./flowModel";
+import { createFlowNode, initialFlowEdges, initialFlowNodes } from "./flowModel";
+import { createScenarioSnapshot } from "./scenarioPersistence";
 import {
   deleteScenario,
   loadScenarioDraft,

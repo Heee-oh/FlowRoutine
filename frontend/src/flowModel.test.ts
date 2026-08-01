@@ -4,12 +4,12 @@ import {
   assessStartSafety,
   buildStartRequestFromGraph,
   createFlowNode,
-  createSavedScenario,
   initialFlowEdges,
   initialFlowNodes,
   parseCaptureText,
 } from "./flowModel";
 import { buildK6Script } from "./k6Export";
+import { createSavedScenario } from "./scenarioPersistence";
 import type { EnvironmentProfile, FlowNodeData } from "./flowTypes";
 import type { LoadConfig, PreflightResponse, StartRequest } from "./types";
 

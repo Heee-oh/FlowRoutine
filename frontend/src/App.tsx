@@ -9,11 +9,10 @@ import {
   useEdgesState,
   useNodesState,
 } from "@xyflow/react";
-import { FileCode, HelpCircle, Play, Redo2, Square, Undo2, Workflow } from "lucide-react";
+import { Play, Square, Workflow } from "lucide-react";
+import { AppDialogs, AppToolbar, HistoryBanner } from "./components/AppChrome";
 import { EnvironmentPanel } from "./components/EnvironmentPanel";
 import { FlowCanvas } from "./components/FlowCanvas";
-import { HelpDialog, OpenAPIImportDialog, StartConfirmDialog } from "./components/Dialogs";
-import { ImportPreviewDialog } from "./components/ImportPreviewDialog";
 import { MetricGrid, MetricsChart } from "./components/Metrics";
 import { NodeInspector } from "./components/NodeInspector";
 import { NodePalette } from "./components/NodePalette";
@@ -30,15 +29,11 @@ import {
   assessStartSafety,
   buildStartRequestFromGraph,
   createFlowNode,
-  createSavedScenario,
-  createScenarioSnapshot,
   getMetricWindowMs,
   initialFlowEdges,
   initialFlowNodes,
-  nextNodeIndexFromNodes,
   openAPIEndpointToRequestSettings,
   refreshNodeDisplay,
-  reviveSavedNodes,
 } from "./flowModel";
 import type {
   EnvironmentProfile,
@@ -54,20 +49,22 @@ import {
   type GraphSnapshot,
 } from "./graphHistory";
 import { validateScenarioGraph } from "./graphCompiler";
-import { parseHarArchive } from "./harImport";
 import type { HelpLanguage, HelpTopic } from "./help";
 import {
   appendImportedRequestsToGraph,
   buildReplacementImportGraph,
   type ImportedRequest,
   type RequestImportMode,
-  type RequestImportPreview,
-  type RequestImportSource,
 } from "./importGraph";
 import { assertImportFileSize } from "./importValidation";
 import { downloadK6Script } from "./k6Export";
-import { parsePostmanCollection } from "./postmanImport";
 import { purgeLegacyRunBaselines } from "./report";
+import {
+  createSavedScenario,
+  createScenarioSnapshot,
+  nextNodeIndexFromNodes,
+  reviveSavedNodes,
+} from "./scenarioPersistence";
 import {
   deleteScenario,
   downloadScenarioFile,
@@ -82,11 +79,10 @@ import {
 import { DEFAULT_METRIC_WINDOW_MS, useLoadStore, useMetricsStore } from "./store";
 import type {
   OpenAPIEndpoint,
-  OpenAPIImportRequest,
-  OpenAPIImportResponse,
   StartRequest,
 } from "./types";
-import { importOpenAPI, onMetricsBatch, preflightLoad, startLoad, stopLoad } from "./wails";
+import { useOpenAPIImportWorkflow, useRequestImportWorkflow } from "./useImportWorkflows";
+import { onMetricsBatch, preflightLoad, startLoad, stopLoad } from "./wails";
 
 export function App() {
   const running = useLoadStore((state) => state.running);
@@ -106,13 +102,6 @@ export function App() {
   const [pendingScenario, setPendingScenario] = useState<SavedScenario | null>(null);
   const [helpTopic, setHelpTopic] = useState<HelpTopic | null>(null);
   const [helpLanguage, setHelpLanguage] = useState<HelpLanguage>("ko");
-  const [openAPIImportOpen, setOpenAPIImportOpen] = useState(false);
-  const [openAPIImportLoading, setOpenAPIImportLoading] = useState(false);
-  const [openAPIImportError, setOpenAPIImportError] = useState("");
-  const [openAPIImportMessage, setOpenAPIImportMessage] = useState("");
-  const [openAPIImported, setOpenAPIImported] = useState<OpenAPIImportResponse | null>(null);
-  const [pendingRequestImport, setPendingRequestImport] = useState<RequestImportPreview | null>(null);
-  const [requestImportError, setRequestImportError] = useState("");
   const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>(loadScenarioLibrary);
   const [activeScenarioId, setActiveScenarioId] = useState<string | null>(initialDraft?.activeScenarioId ?? null);
   const [scenarioName, setScenarioName] = useState(initialDraft?.name ?? "Untitled scenario");
@@ -141,7 +130,6 @@ export function App() {
   );
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const nextNodeIndex = useRef(nextNodeIndexFromNodes(initialDraft?.nodes ?? initialFlowNodes));
-  const nextRequestImportId = useRef(1);
   const graphHistory = useRef(new BoundedHistory<GraphSnapshot>(50));
   const historyCapturePending = useRef(false);
   const [, refreshHistory] = useState(0);
@@ -748,96 +736,40 @@ export function App() {
     setPendingScenario(null);
   }, []);
 
-  const handleOpenOpenAPIImport = useCallback(() => {
-    setOpenAPIImportError("");
-    setOpenAPIImportMessage("");
-    setOpenAPIImported(null);
-    setOpenAPIImportOpen(true);
-  }, []);
-
-  const handleCloseOpenAPIImport = useCallback(() => {
-    if (!openAPIImportLoading) {
-      setOpenAPIImportOpen(false);
-      setOpenAPIImportError("");
-      setOpenAPIImportMessage("");
-      setOpenAPIImported(null);
-    }
-  }, [openAPIImportLoading]);
-
-  const handleSubmitOpenAPIImport = useCallback(async (request: OpenAPIImportRequest) => {
-    setOpenAPIImportLoading(true);
-    setOpenAPIImportError("");
-    setOpenAPIImportMessage("");
-    setOpenAPIImported(null);
-    try {
-      const imported = await importOpenAPI(request);
-      setOpenAPIImported(imported);
-      setOpenAPIImportMessage(`Loaded ${imported.title || "OpenAPI document"} (${imported.openapi}) with ${imported.endpoints.length} endpoints`);
-    } catch (err) {
-      setOpenAPIImportError(err instanceof Error ? err.message : "Failed to load OpenAPI document");
-    } finally {
-      setOpenAPIImportLoading(false);
-    }
-  }, []);
-
-  const handleSelectOpenAPIEndpoint = useCallback((endpoint: OpenAPIEndpoint) => {
-    if (!openAPIImported) {
-      return;
-    }
+  const handleAddOpenAPIEndpoint = useCallback((endpoint: OpenAPIEndpoint, sourceURL: string) => {
     const index = nextNodeIndex.current;
     nextNodeIndex.current += 1;
     const node = createFlowNode(
       "request",
       index,
-      openAPIEndpointToRequestSettings(endpoint, openAPIImported.sourceUrl),
+      openAPIEndpointToRequestSettings(endpoint, sourceURL),
       undefined,
       handleDeleteNode,
     );
     recordGraphChange("Imported OpenAPI request");
     setFlowNodes((currentNodes) => currentNodes.concat(node));
     setSelectedNodeId(node.id);
-    setOpenAPIImportOpen(false);
-    setOpenAPIImportError("");
-    setOpenAPIImportMessage("");
-    setOpenAPIImported(null);
-  }, [handleDeleteNode, openAPIImported, recordGraphChange, setFlowNodes]);
+  }, [handleDeleteNode, recordGraphChange, setFlowNodes]);
 
-  const prepareRequestImport = useCallback(async (source: RequestImportSource, file: File) => {
-    const label = source === "Postman" ? "Postman collection" : "HAR file";
-    try {
-      setError("");
-      setRequestImportError("");
-      assertImportFileSize(file.size, label);
-      const raw = await file.text();
-      const requests = source === "Postman"
-        ? parsePostmanCollection(raw)
-        : parseHarArchive(raw);
-      setPendingRequestImport({
-        id: nextRequestImportId.current,
-        fileName: file.name,
-        fileSize: file.size,
-        requests,
-        source,
-      });
-      nextRequestImportId.current += 1;
-    } catch (err) {
-      setPendingRequestImport(null);
-      setError(err instanceof Error ? err.message : `Failed to read ${label}`);
-    }
-  }, [setError]);
-
-  const handleImportPostmanFile = useCallback((file: File) => {
-    void prepareRequestImport("Postman", file);
-  }, [prepareRequestImport]);
-
-  const handleImportHarFile = useCallback((file: File) => {
-    void prepareRequestImport("HAR", file);
-  }, [prepareRequestImport]);
-
-  const handleCancelRequestImport = useCallback(() => {
-    setPendingRequestImport(null);
-    setRequestImportError("");
-  }, []);
+  const {
+    close: handleCloseOpenAPIImport,
+    error: openAPIImportError,
+    imported: openAPIImported,
+    loading: openAPIImportLoading,
+    message: openAPIImportMessage,
+    open: openAPIImportOpen,
+    selectEndpoint: handleSelectOpenAPIEndpoint,
+    show: handleOpenOpenAPIImport,
+    submit: handleSubmitOpenAPIImport,
+  } = useOpenAPIImportWorkflow(handleAddOpenAPIEndpoint);
+  const {
+    clear: handleCancelRequestImport,
+    error: requestImportError,
+    importHAR: handleImportHarFile,
+    importPostman: handleImportPostmanFile,
+    pending: pendingRequestImport,
+    setError: setRequestImportError,
+  } = useRequestImportWorkflow(setError);
 
   const handleConfirmRequestImport = useCallback((requests: ImportedRequest[], mode: RequestImportMode) => {
     if (!pendingRequestImport) {
@@ -864,12 +796,23 @@ export function App() {
         setAuthSecrets({});
       }
       nextNodeIndex.current = importedGraph.nextNodeIndex;
-      setPendingRequestImport(null);
+      handleCancelRequestImport();
       setHistoryNotice(historyLabel);
     } catch (err) {
       setRequestImportError(err instanceof Error ? err.message : "Failed to apply request import");
     }
-  }, [flowEdges, flowNodes, handleDeleteNode, pendingRequestImport, recordGraphChange, setError, setFlowEdges, setFlowNodes]);
+  }, [
+    flowEdges,
+    flowNodes,
+    handleCancelRequestImport,
+    handleDeleteNode,
+    pendingRequestImport,
+    recordGraphChange,
+    setError,
+    setFlowEdges,
+    setFlowNodes,
+    setRequestImportError,
+  ]);
 
   return (
     <div className="app-shell">
@@ -932,48 +875,19 @@ export function App() {
       </aside>
 
       <main className="workspace">
-        <header className="toolbar">
-          <div>
-            <div className="eyebrow">Scenario</div>
-            <h2>{scenarioName || "Untitled scenario"}</h2>
-          </div>
-          <div className="toolbar-actions">
-            <button
-              type="button"
-              className="secondary icon-button"
-              aria-label="Undo graph change"
-              title={graphHistory.current.canUndo ? `Undo: ${graphHistory.current.undoLabel}` : "Nothing to undo"}
-              disabled={running || stopping || !graphHistory.current.canUndo}
-              onClick={handleUndo}
-            >
-              <Undo2 size={17} />
-            </button>
-            <button
-              type="button"
-              className="secondary icon-button"
-              aria-label="Redo graph change"
-              title={graphHistory.current.canRedo ? `Redo: ${graphHistory.current.redoLabel}` : "Nothing to redo"}
-              disabled={running || stopping || !graphHistory.current.canRedo}
-              onClick={handleRedo}
-            >
-              <Redo2 size={17} />
-            </button>
-            <button
-              type="button"
-              className="secondary icon-button"
-              aria-label="Export k6 script"
-              title="Export k6 script"
-              disabled={running || stopping}
-              onClick={handleExportK6}
-            >
-              <FileCode size={17} />
-            </button>
-            <button type="button" className="secondary icon-button" aria-label="Open help" title="Help" onClick={() => setHelpTopic("overview")}>
-              <HelpCircle size={17} />
-            </button>
-            <div className={`status-pill ${running ? "running" : ""}`}>{stopping ? "Stopping" : running ? "Running" : "Idle"}</div>
-          </div>
-        </header>
+        <AppToolbar
+          canRedo={graphHistory.current.canRedo}
+          canUndo={graphHistory.current.canUndo}
+          onExportK6={handleExportK6}
+          onOpenHelp={() => setHelpTopic("overview")}
+          onRedo={handleRedo}
+          onUndo={handleUndo}
+          redoLabel={graphHistory.current.redoLabel}
+          running={running}
+          scenarioName={scenarioName}
+          stopping={stopping}
+          undoLabel={graphHistory.current.undoLabel}
+        />
 
         <NodePalette
           onAddNode={handleAddNode}
@@ -982,32 +896,19 @@ export function App() {
           onImportPostman={handleImportPostmanFile}
         />
 
-        {historyNotice || deletedScenario ? (
-          <div className="import-undo" role="status">
-            <span>{historyNotice || `Deleted library entry: ${deletedScenario?.scenario.name}`}</span>
-            <div>
-              {deletedScenario ? (
-                <button type="button" className="secondary" onClick={handleUndoScenarioDelete}>Undo delete</button>
-              ) : null}
-              {graphHistory.current.canUndo ? (
-                <button type="button" className="secondary" onClick={handleUndo}>Undo graph</button>
-              ) : null}
-              {graphHistory.current.canRedo ? (
-                <button type="button" className="secondary" onClick={handleRedo}>Redo graph</button>
-              ) : null}
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => {
-                  setHistoryNotice("");
-                  setDeletedScenario(null);
-                }}
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        ) : null}
+        <HistoryBanner
+          canRedo={graphHistory.current.canRedo}
+          canUndo={graphHistory.current.canUndo}
+          deletedScenarioName={deletedScenario?.scenario.name}
+          notice={historyNotice}
+          onDismiss={() => {
+            setHistoryNotice("");
+            setDeletedScenario(null);
+          }}
+          onRedo={handleRedo}
+          onUndo={handleUndo}
+          onUndoDelete={handleUndoScenarioDelete}
+        />
 
         <ScenarioPath nodes={flowNodes} validation={graphValidation} />
 
@@ -1024,43 +925,39 @@ export function App() {
         <MetricsChart />
       </main>
 
-      {pendingSafety ? (
-        <StartConfirmDialog
-          safety={pendingSafety}
-          request={pendingStart}
-          onCancel={handleCancelStart}
-          onConfirm={handleConfirmStart}
-        />
-      ) : null}
-      {helpTopic ? (
-        <HelpDialog
-          topic={helpTopic}
-          language={helpLanguage}
-          setLanguage={setHelpLanguage}
-          onClose={() => setHelpTopic(null)}
-        />
-      ) : null}
-      {openAPIImportOpen ? (
-        <OpenAPIImportDialog
-          error={openAPIImportError}
-          imported={openAPIImported}
-          loading={openAPIImportLoading}
-          message={openAPIImportMessage}
-          onCancel={handleCloseOpenAPIImport}
-          onSelectEndpoint={handleSelectOpenAPIEndpoint}
-          onSubmit={handleSubmitOpenAPIImport}
-        />
-      ) : null}
-      {pendingRequestImport ? (
-        <ImportPreviewDialog
-          key={pendingRequestImport.id}
-          appendAvailable={Boolean(graphValidation.compiled)}
-          error={requestImportError}
-          preview={pendingRequestImport}
-          onCancel={handleCancelRequestImport}
-          onConfirm={handleConfirmRequestImport}
-        />
-      ) : null}
+      <AppDialogs
+        start={pendingSafety ? {
+          safety: pendingSafety,
+          request: pendingStart,
+          onCancel: handleCancelStart,
+          onConfirm: handleConfirmStart,
+        } : null}
+        help={helpTopic ? {
+          topic: helpTopic,
+          language: helpLanguage,
+          setLanguage: setHelpLanguage,
+          onClose: () => setHelpTopic(null),
+        } : null}
+        openAPI={openAPIImportOpen ? {
+          error: openAPIImportError,
+          imported: openAPIImported,
+          loading: openAPIImportLoading,
+          message: openAPIImportMessage,
+          onCancel: handleCloseOpenAPIImport,
+          onSelectEndpoint: handleSelectOpenAPIEndpoint,
+          onSubmit: handleSubmitOpenAPIImport,
+        } : null}
+        requestImport={pendingRequestImport ? {
+          key: pendingRequestImport.id,
+          props: {
+            appendAvailable: Boolean(graphValidation.compiled),
+            error: requestImportError,
+            preview: pendingRequestImport,
+            onCancel: handleCancelRequestImport,
+            onConfirm: handleConfirmRequestImport,
+          },
+        } : null}
+      />
     </div>
   );
 }

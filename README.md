@@ -176,6 +176,10 @@ Optional native workers
   - exact histogram aggregation
 ```
 
+The root and `cmd/flowroutine` desktop entrypoints share the backend and Wails options in `internal/desktop` while
+retaining the generated `main.App` binding namespace. `npm --prefix frontend run build:wails` rebuilds the frontend,
+copies assets to the command entrypoint in sorted order, and verifies the source/target SHA-256 manifests.
+
 ## Benchmark Helper
 
 Run an embedded local loopback benchmark:
