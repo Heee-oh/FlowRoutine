@@ -87,6 +87,32 @@ describe("secret sanitization", () => {
     expect(malformedJSON).toBe("{\"password\":\"{{SECRET_PASSWORD}}\",}");
   });
 
+  it("preserves explicitly allowed runtime templates without exposing literals", () => {
+    const captures = new Set(["token"]);
+    const headers = sanitizeHeaderRows([
+      { name: "Authorization", value: "Bearer {{token}}" },
+      { name: "X-API-Key", value: "literal-key" },
+    ], captures);
+    const url = sanitizeSensitiveURL(
+      "https://example.com/items?access_token={{token}}&client_secret=literal-secret",
+      captures,
+    );
+    const body = sanitizeStructuredBody(
+      JSON.stringify({ token: "{{token}}", password: "literal-password" }),
+      captures,
+    );
+
+    expect(headers).toEqual([
+      { name: "Authorization", value: "Bearer {{token}}" },
+      { name: "X-API-Key", value: "{{SECRET_X_API_KEY}}" },
+    ]);
+    expect(url).toContain("access_token={{token}}");
+    expect(url).toContain("client_secret={{SECRET_CLIENT_SECRET}}");
+    expect(body).toContain("\"token\":\"{{token}}\"");
+    expect(body).toContain("\"password\":\"{{SECRET_PASSWORD}}\"");
+    expect(`${url}${body}`).not.toMatch(/literal-(?:secret|password)/);
+  });
+
   it("collects and resolves reserved runtime bindings", () => {
     expect(collectSecretPlaceholderNames([
       "{{secret_token}}",
