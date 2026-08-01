@@ -28,6 +28,7 @@ type AtomicStats struct {
 	droppedIterations atomic.Uint64
 	shards            []statsShard
 	requestSteps      []atomicRequestStepStats
+	branchRoutes      []atomicBranchRouteStats
 }
 
 type statsShard struct {
@@ -133,6 +134,9 @@ func (s *AtomicStats) Reset(startedAt time.Time) {
 	}
 	for i := range s.requestSteps {
 		s.requestSteps[i].reset()
+	}
+	for i := range s.branchRoutes {
+		s.branchRoutes[i].reset()
 	}
 }
 

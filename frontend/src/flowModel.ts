@@ -33,6 +33,9 @@ export const nodePalette: Array<{ kind: FlowNodeKind; label: string }> = [
   { kind: "engine", label: "Engine" },
   { kind: "assertion", label: "Assert" },
   { kind: "delay", label: "Delay" },
+  { kind: "branch", label: "Branch" },
+  { kind: "join", label: "Join" },
+  { kind: "loop", label: "Loop" },
   { kind: "metrics", label: "Metrics" },
   { kind: "window", label: "Window" },
 ];
@@ -193,6 +196,16 @@ export function buildStartRequestFromGraph(
       profile: profileSummary.profile,
       latencySampleRate: numberValue(metricsNode?.data.latencySampleRate, fallback.config.latencySampleRate),
       scenarioSteps,
+      executionPlan: compiled.executionPlan ? {
+        ...compiled.executionPlan,
+        steps: compiled.executionPlan.steps.map((step) => ({
+          ...step,
+          routes: step.routes?.map((route) => ({
+            ...route,
+            name: route.name ? sanitizeSensitiveURL(route.name) : route.name,
+          })),
+        })),
+      } : undefined,
     },
     batchIntervalMs: numberValue(metricsNode?.data.batchIntervalMs, fallback.batchIntervalMs),
     qualityGate: qualityGateFromMetricsNode(metricsNode),
@@ -228,6 +241,18 @@ export function refreshNodeDisplay(node: Node<FlowNodeData>): Node<FlowNodeData>
     case "delay":
       data.value = `${numberValue(data.delayMs, 0)} ms`;
       data.caption = "think time";
+      break;
+    case "branch":
+      data.value = stringValue(data.branchJoinNodeId, "Set join ID") || "Set join ID";
+      data.caption = stringValue(data.branchRoutesText, "").trim() ? "weighted routes" : "equal route weights";
+      break;
+    case "join":
+      data.value = "Merge";
+      data.caption = "isolated branch scopes end";
+      break;
+    case "loop":
+      data.value = `${numberValue(data.loopMaxIterations, 1)} iterations`;
+      data.caption = stringValue(data.loopBodyTargetId, "Set body target") || "Set body target";
       break;
     case "metrics":
       data.value = gateCaption(data);
@@ -464,6 +489,31 @@ function nodeTemplate(kind: FlowNodeKind, settings: Partial<FlowNodeData> | null
         caption: "think time",
         tone: "delay",
         delayMs: 100,
+      };
+    case "branch":
+      return {
+        label: "Branch",
+        value: settings?.branchJoinNodeId ?? "Set join ID",
+        caption: "equal route weights",
+        tone: "branch",
+        branchJoinNodeId: settings?.branchJoinNodeId ?? "",
+        branchRoutesText: settings?.branchRoutesText ?? "",
+      };
+    case "join":
+      return {
+        label: "Join",
+        value: "Merge",
+        caption: "isolated branch scopes end",
+        tone: "join",
+      };
+    case "loop":
+      return {
+        label: "Loop",
+        value: `${settings?.loopMaxIterations ?? 1} iterations`,
+        caption: settings?.loopBodyTargetId ?? "Set body target",
+        tone: "loop",
+        loopBodyTargetId: settings?.loopBodyTargetId ?? "",
+        loopMaxIterations: settings?.loopMaxIterations ?? 1,
       };
     case "metrics":
       return {

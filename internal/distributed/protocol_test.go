@@ -42,6 +42,13 @@ func TestExecutionPlanRoundTripsConfigWithoutPersistingRuntimeBindings(t *testin
 			Headers: []engine.Header{{Name: "Authorization", Value: "Bearer {{SECRET_TOKEN}}"}},
 			Body:    []byte(`{"token":"{{SECRET_TOKEN}}"}`),
 		}},
+		ExecutionPlan: &engine.ExecutionPlan{
+			SchemaVersion: engine.ExecutionPlanSchemaVersion,
+			EntryStepID:   "request",
+			Steps: []engine.ExecutionPlanStep{{
+				ID: "request", Kind: engine.ExecutionStepScenario,
+			}},
+		},
 	}
 	plan := NewExecutionPlan("scenario", 3, cfg)
 	payload, err := json.Marshal(plan)
@@ -56,6 +63,7 @@ func TestExecutionPlanRoundTripsConfigWithoutPersistingRuntimeBindings(t *testin
 	}
 	roundTrip := plan.Config.EngineConfig(map[string]string{"SECRET_TOKEN": "runtime"})
 	if !reflect.DeepEqual(roundTrip.ScenarioSteps, cfg.ScenarioSteps) ||
+		!reflect.DeepEqual(roundTrip.ExecutionPlan, cfg.ExecutionPlan) ||
 		!reflect.DeepEqual(roundTrip.Profile, cfg.Profile) ||
 		roundTrip.Duration != cfg.Duration || roundTrip.RampUp != cfg.RampUp {
 		t.Fatalf("config changed during protocol conversion: %+v", roundTrip)

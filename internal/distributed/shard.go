@@ -110,5 +110,14 @@ func cloneEngineConfig(cfg engine.Config) engine.Config {
 		cloned.ScenarioSteps[index].Body = append([]byte(nil), step.Body...)
 		cloned.ScenarioSteps[index].Captures = append([]engine.VariableCapture(nil), step.Captures...)
 	}
+	if cfg.ExecutionPlan != nil {
+		plan := *cfg.ExecutionPlan
+		plan.Steps = make([]engine.ExecutionPlanStep, len(cfg.ExecutionPlan.Steps))
+		for index, step := range cfg.ExecutionPlan.Steps {
+			plan.Steps[index] = step
+			plan.Steps[index].Routes = append([]engine.ExecutionRoute(nil), step.Routes...)
+		}
+		cloned.ExecutionPlan = &plan
+	}
 	return cloned
 }

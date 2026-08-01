@@ -10,7 +10,7 @@ import (
 	"flowroutine/internal/bridge"
 )
 
-const ReportSchemaVersion = 1
+const ReportSchemaVersion = 2
 
 type RunReport struct {
 	SchemaVersion     int                      `json:"schemaVersion"`
@@ -51,6 +51,7 @@ type ReportSummary struct {
 	Bytes                          ReportBytes                     `json:"bytes"`
 	StatusCodes                    []bridge.StatusCodeCount        `json:"statusCodes"`
 	RequestSteps                   []bridge.RequestStepMetrics     `json:"requestSteps"`
+	BranchRoutes                   []bridge.BranchRouteMetrics     `json:"branchRoutes"`
 }
 
 type ReportFailures struct {
@@ -126,9 +127,17 @@ func BuildRunReport(file *ScenarioFile, preflight bridge.PreflightResponse, fina
 			},
 			StatusCodes:  cloneStatusCodes(final.StatusCodes),
 			RequestSteps: cloneRequestSteps(final.StepMetrics),
+			BranchRoutes: cloneBranchRoutes(final.BranchMetrics),
 		},
 		QualityGate: EvaluateQualityGate(gate, final, averageRPS),
 	}
+}
+
+func cloneBranchRoutes(values []bridge.BranchRouteMetrics) []bridge.BranchRouteMetrics {
+	if len(values) == 0 {
+		return []bridge.BranchRouteMetrics{}
+	}
+	return append([]bridge.BranchRouteMetrics(nil), values...)
 }
 
 func MarshalJSONReport(report *RunReport) ([]byte, error) {

@@ -4,6 +4,17 @@ import { buildK6Script } from "./k6Export";
 import type { StartRequest } from "./types";
 
 describe("buildK6Script", () => {
+  it("rejects graph execution plans instead of silently flattening branches", () => {
+    const request = createRequest();
+    request.config.executionPlan = {
+      schemaVersion: 1,
+      entryStepId: "request",
+      steps: [{ id: "request", kind: "step" }],
+    };
+
+    expect(() => buildK6Script(request)).toThrow("does not yet support Branch, Join, or Loop");
+  });
+
   it("exports secrets as k6 environment bindings", () => {
     const request = createRequest();
     request.config.scenarioSteps = [

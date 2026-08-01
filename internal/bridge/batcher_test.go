@@ -225,6 +225,29 @@ func TestBuildMetricsBatchIncludesCompactRequestStepDiagnostics(t *testing.T) {
 	}
 }
 
+func TestBuildMetricsBatchIncludesBranchRouteDiagnostics(t *testing.T) {
+	now := time.Unix(21, 0)
+	batch := buildMetricsBatchWithDiagnostics(
+		engine.Snapshot{At: now.Add(-time.Second)},
+		engine.Snapshot{At: now, TotalRequests: 5, SuccessRequests: 4, FailedRequests: 1},
+		false,
+		now,
+		nil,
+		[]engine.BranchRouteSnapshot{{
+			BranchID: "branch", RouteID: "route-a", Name: "Route A",
+			Selections: 3, Total: 5, Success: 4, Failed: 1,
+		}},
+	)
+	if len(batch.BranchMetrics) != 1 {
+		t.Fatalf("got %d branch metrics, want 1", len(batch.BranchMetrics))
+	}
+	metric := batch.BranchMetrics[0]
+	if metric.BranchID != "branch" || metric.RouteID != "route-a" ||
+		metric.Selections != 3 || metric.Total != 5 || metric.Success != 4 || metric.Failed != 1 {
+		t.Fatalf("unexpected branch metrics: %+v", metric)
+	}
+}
+
 func TestStepMetricsEmissionIsThrottledAndForcedAtCompletion(t *testing.T) {
 	startedAt := time.Unix(1, 0)
 	if !shouldIncludeStepMetrics(time.Time{}, startedAt, false) {

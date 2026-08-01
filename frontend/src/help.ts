@@ -12,6 +12,8 @@ export const overviewHelpItems: HelpItem[] = [
   helpItem("Engine", "Staged VU or arrival-rate profiles, timeout, connection cap, and request RPS cap.", "단계형 VU 또는 arrival-rate profile, timeout, max conns, request RPS limit을 제어합니다."),
   helpItem("Assert", "Checks response status, headers, typed JSON values, or response and step latency.", "응답 status, header, typed JSON 값, response/step latency를 확인합니다."),
   helpItem("Delay", "Wait time inserted when the node is on the Request through Engine path.", "Request에서 Engine으로 이어지는 실행 경로에 있을 때 요청 사이에 delay를 넣습니다."),
+  helpItem("Branch and Join", "Split traffic into deterministic weighted routes and merge them at an explicit Join.", "Traffic을 재현 가능한 weighted route로 나누고 명시적인 Join에서 합칩니다."),
+  helpItem("Loop", "Repeat a body path a bounded number of times. Unbounded and nested loops are rejected before execution.", "Body path를 제한된 횟수만 반복합니다. 무한 loop와 nested loop는 실행 전에 거부됩니다."),
   helpItem("Metrics", "Batch interval and latency sampling for live measurements.", "실시간 metrics 전송 주기와 latency sampling 빈도를 설정합니다."),
   helpItem("Window", "How long realtime chart points are retained in the UI.", "실시간 chart points가 UI에 유지되는 시간을 설정합니다."),
   helpItem("Connection order", "Use Request -> Engine -> Metrics -> Window for the base flow. Put Delay or Assert between Request and Engine when you want them to run.", "기본 flow는 Request -> Engine -> Metrics -> Window 순서로 연결합니다.\nDelay나 Assert를 실행하려면 Request와 Engine 사이 path에 넣어야 합니다."),
@@ -44,6 +46,17 @@ export const nodeHelpItems: Record<FlowNodeKind, HelpItem[]> = {
   ],
   delay: [
     helpItem("Delay ms", "Wait time in milliseconds when this node is on the Request through Engine path.", "이 node가 Request에서 Engine으로 가는 path에 있을 때 적용되는 wait time입니다."),
+  ],
+  branch: [
+    helpItem("Join node ID", "The explicit Join where every route reconverges. Routes may not merge earlier.", "모든 route가 다시 합쳐지는 명시적인 Join ID입니다. 그보다 앞에서 route를 합칠 수 없습니다."),
+    helpItem("Route weights", "Use targetNodeId=weight. Selection is deterministic for the same VU, iteration, and branch.", "targetNodeId=weight 형식을 사용합니다. 같은 VU, iteration, branch에서는 선택 결과가 재현됩니다."),
+  ],
+  join: [
+    helpItem("Variable isolation", "Variables captured inside a route stay in that route and are removed at Join. Run-scoped values persist only for repeated selections of the same route.", "Route 안에서 capture한 변수는 해당 route에만 존재하고 Join에서 제거됩니다. Run scope 값은 같은 route가 다시 선택될 때만 유지됩니다."),
+  ],
+  loop: [
+    helpItem("Body target", "Choose one outgoing target as the body. The body must return to this Loop; the other target is the exit.", "Outgoing target 하나를 body로 지정합니다. Body는 이 Loop로 돌아와야 하며 다른 target은 exit입니다."),
+    helpItem("Maximum iterations", "The body runs 1-1000 times per scenario iteration. Nested loops are rejected to keep execution bounds explicit.", "Body는 scenario iteration마다 1~1000회 실행됩니다. 실행 상한을 명확하게 유지하기 위해 nested loop는 거부됩니다."),
   ],
   metrics: [
     helpItem("Batch ms", "How often the backend sends metric updates to the UI (100-5000 ms). Slower updates reduce overhead on long runs.", "Backend가 UI로 metrics updates를 보내는 주기(100-5000ms)입니다. 장기 실행에서는 느린 주기가 overhead를 줄입니다."),

@@ -59,22 +59,48 @@ type ExecutionPlan struct {
 }
 
 type PlanConfig struct {
-	URL               string         `json:"url"`
-	Method            string         `json:"method,omitempty"`
-	Headers           []Header       `json:"headers,omitempty"`
-	Body              []byte         `json:"body,omitempty"`
-	VirtualUsers      int            `json:"virtualUsers"`
-	DurationNS        int64          `json:"durationNs"`
-	RequestTimeoutNS  int64          `json:"requestTimeoutNs"`
-	MaxConnsPerHost   int            `json:"maxConnsPerHost"`
-	ReadBufferSize    int            `json:"readBufferSize"`
-	WriteBufferSize   int            `json:"writeBufferSize"`
-	MaxResponseBytes  int            `json:"maxResponseBytes"`
-	LatencySampleRate int            `json:"latencySampleRate"`
-	RateLimitRPS      int            `json:"rateLimitRps"`
-	RampUpNS          int64          `json:"rampUpNs"`
-	Profile           *LoadProfile   `json:"profile,omitempty"`
-	ScenarioSteps     []ScenarioStep `json:"scenarioSteps,omitempty"`
+	URL               string                 `json:"url"`
+	Method            string                 `json:"method,omitempty"`
+	Headers           []Header               `json:"headers,omitempty"`
+	Body              []byte                 `json:"body,omitempty"`
+	VirtualUsers      int                    `json:"virtualUsers"`
+	DurationNS        int64                  `json:"durationNs"`
+	RequestTimeoutNS  int64                  `json:"requestTimeoutNs"`
+	MaxConnsPerHost   int                    `json:"maxConnsPerHost"`
+	ReadBufferSize    int                    `json:"readBufferSize"`
+	WriteBufferSize   int                    `json:"writeBufferSize"`
+	MaxResponseBytes  int                    `json:"maxResponseBytes"`
+	LatencySampleRate int                    `json:"latencySampleRate"`
+	RateLimitRPS      int                    `json:"rateLimitRps"`
+	RampUpNS          int64                  `json:"rampUpNs"`
+	Profile           *LoadProfile           `json:"profile,omitempty"`
+	ScenarioSteps     []ScenarioStep         `json:"scenarioSteps,omitempty"`
+	ExecutionPlan     *ScenarioExecutionPlan `json:"executionPlan,omitempty"`
+}
+
+type ScenarioExecutionPlan struct {
+	SchemaVersion int                         `json:"schemaVersion"`
+	EntryStepID   string                      `json:"entryStepId"`
+	Steps         []ScenarioExecutionPlanStep `json:"steps"`
+}
+
+type ScenarioExecutionPlanStep struct {
+	ID            string                       `json:"id"`
+	Kind          engine.ExecutionPlanStepKind `json:"kind"`
+	NextStepID    string                       `json:"nextStepId,omitempty"`
+	RequestStepID string                       `json:"requestStepId,omitempty"`
+	Routes        []ScenarioExecutionRoute     `json:"routes,omitempty"`
+	JoinStepID    string                       `json:"joinStepId,omitempty"`
+	BodyStepID    string                       `json:"bodyStepId,omitempty"`
+	ExitStepID    string                       `json:"exitStepId,omitempty"`
+	MaxIterations int                          `json:"maxIterations,omitempty"`
+}
+
+type ScenarioExecutionRoute struct {
+	ID           string `json:"id"`
+	Name         string `json:"name,omitempty"`
+	TargetStepID string `json:"targetStepId"`
+	Weight       int    `json:"weight"`
 }
 
 type Header struct {
@@ -171,6 +197,7 @@ type SnapshotResponse struct {
 	Status       StatusResponse               `json:"status"`
 	Snapshot     engine.Snapshot              `json:"snapshot"`
 	RequestSteps []engine.RequestStepSnapshot `json:"requestSteps,omitempty"`
+	BranchRoutes []engine.BranchRouteSnapshot `json:"branchRoutes,omitempty"`
 }
 
 func NewExecutionPlan(id string, revision uint64, cfg engine.Config) ExecutionPlan {
@@ -245,6 +272,9 @@ func NewPlanConfig(cfg engine.Config) PlanConfig {
 			}
 		}
 	}
+	if cfg.ExecutionPlan != nil {
+		converted.ExecutionPlan = fromEngineExecutionPlan(cfg.ExecutionPlan)
+	}
 	return converted
 }
 
@@ -310,6 +340,59 @@ func (cfg PlanConfig) EngineConfig(runtimeBindings map[string]string) engine.Con
 					Name: capture.Name, Path: capture.Path, Scope: capture.Scope, OnStatus: capture.OnStatus,
 				}
 			}
+		}
+	}
+	if cfg.ExecutionPlan != nil {
+		converted.ExecutionPlan = toEngineExecutionPlan(cfg.ExecutionPlan)
+	}
+	return converted
+}
+
+func fromEngineExecutionPlan(plan *engine.ExecutionPlan) *ScenarioExecutionPlan {
+	converted := &ScenarioExecutionPlan{
+		SchemaVersion: plan.SchemaVersion,
+		EntryStepID:   plan.EntryStepID,
+		Steps:         make([]ScenarioExecutionPlanStep, len(plan.Steps)),
+	}
+	for index, step := range plan.Steps {
+		var routes []ScenarioExecutionRoute
+		if len(step.Routes) > 0 {
+			routes = make([]ScenarioExecutionRoute, len(step.Routes))
+			for routeIndex, route := range step.Routes {
+				routes[routeIndex] = ScenarioExecutionRoute{
+					ID: route.ID, Name: route.Name, TargetStepID: route.TargetStepID, Weight: route.Weight,
+				}
+			}
+		}
+		converted.Steps[index] = ScenarioExecutionPlanStep{
+			ID: step.ID, Kind: step.Kind, NextStepID: step.NextStepID,
+			RequestStepID: step.RequestStepID, Routes: routes, JoinStepID: step.JoinStepID,
+			BodyStepID: step.BodyStepID, ExitStepID: step.ExitStepID, MaxIterations: step.MaxIterations,
+		}
+	}
+	return converted
+}
+
+func toEngineExecutionPlan(plan *ScenarioExecutionPlan) *engine.ExecutionPlan {
+	converted := &engine.ExecutionPlan{
+		SchemaVersion: plan.SchemaVersion,
+		EntryStepID:   plan.EntryStepID,
+		Steps:         make([]engine.ExecutionPlanStep, len(plan.Steps)),
+	}
+	for index, step := range plan.Steps {
+		var routes []engine.ExecutionRoute
+		if len(step.Routes) > 0 {
+			routes = make([]engine.ExecutionRoute, len(step.Routes))
+			for routeIndex, route := range step.Routes {
+				routes[routeIndex] = engine.ExecutionRoute{
+					ID: route.ID, Name: route.Name, TargetStepID: route.TargetStepID, Weight: route.Weight,
+				}
+			}
+		}
+		converted.Steps[index] = engine.ExecutionPlanStep{
+			ID: step.ID, Kind: step.Kind, NextStepID: step.NextStepID,
+			RequestStepID: step.RequestStepID, Routes: routes, JoinStepID: step.JoinStepID,
+			BodyStepID: step.BodyStepID, ExitStepID: step.ExitStepID, MaxIterations: step.MaxIterations,
 		}
 	}
 	return converted

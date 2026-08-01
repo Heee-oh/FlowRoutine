@@ -40,9 +40,17 @@ type workerVariables struct {
 	iteration        map[string]string
 	run              map[string]string
 	runtime          map[string]string
+	branchRuns       map[string]map[string]string
+	branchIterations map[string]map[string]string
+	branchFrames     []workerVariableFrame
 	renderBuffer     []byte
 	eligibleCaptures []compiledVariableCapture
 	captureValues    []string
+}
+
+type workerVariableFrame struct {
+	iteration map[string]string
+	run       map[string]string
 }
 
 func newWorkerVariables() *workerVariables {
@@ -51,19 +59,31 @@ func newWorkerVariables() *workerVariables {
 
 func newWorkerVariablesWithRuntime(runtimeVariables map[string]string) *workerVariables {
 	return &workerVariables{
-		iteration: make(map[string]string),
-		run:       make(map[string]string),
-		runtime:   runtimeVariables,
+		iteration:        make(map[string]string),
+		run:              make(map[string]string),
+		runtime:          runtimeVariables,
+		branchRuns:       make(map[string]map[string]string),
+		branchIterations: make(map[string]map[string]string),
 	}
 }
 
 func (variables *workerVariables) beginIteration() {
 	clear(variables.iteration)
+	variables.branchFrames = variables.branchFrames[:0]
 }
 
 func (variables *workerVariables) value(name string) (string, bool) {
 	if value, ok := variables.runtime[name]; ok {
 		return value, true
+	}
+	for index := len(variables.branchFrames) - 1; index >= 0; index-- {
+		frame := &variables.branchFrames[index]
+		if value, ok := frame.iteration[name]; ok {
+			return value, true
+		}
+		if value, ok := frame.run[name]; ok {
+			return value, true
+		}
 	}
 	if value, ok := variables.iteration[name]; ok {
 		return value, true
@@ -73,11 +93,26 @@ func (variables *workerVariables) value(name string) (string, bool) {
 }
 
 func (variables *workerVariables) runValueExists(name string) bool {
+	if len(variables.branchFrames) > 0 {
+		_, ok := variables.branchFrames[len(variables.branchFrames)-1].run[name]
+		return ok
+	}
 	_, ok := variables.run[name]
 	return ok
 }
 
 func (variables *workerVariables) set(capture compiledVariableCapture, value string) {
+	if len(variables.branchFrames) > 0 {
+		frame := &variables.branchFrames[len(variables.branchFrames)-1]
+		if capture.scope == VariableScopeRun {
+			if _, exists := frame.run[capture.name]; !exists {
+				frame.run[capture.name] = value
+			}
+			return
+		}
+		frame.iteration[capture.name] = value
+		return
+	}
 	if capture.scope == VariableScopeRun {
 		if !variables.runValueExists(capture.name) {
 			variables.run[capture.name] = value
@@ -89,8 +124,35 @@ func (variables *workerVariables) set(capture compiledVariableCapture, value str
 
 func (variables *workerVariables) invalidate(capture compiledVariableCapture) {
 	if capture.scope == VariableScopeIteration {
+		if len(variables.branchFrames) > 0 {
+			delete(variables.branchFrames[len(variables.branchFrames)-1].iteration, capture.name)
+			return
+		}
 		delete(variables.iteration, capture.name)
 	}
+}
+
+func (variables *workerVariables) pushBranch(key string) {
+	run := variables.branchRuns[key]
+	if run == nil {
+		run = make(map[string]string)
+		variables.branchRuns[key] = run
+	}
+	iteration := variables.branchIterations[key]
+	if iteration == nil {
+		iteration = make(map[string]string)
+		variables.branchIterations[key] = iteration
+	} else {
+		clear(iteration)
+	}
+	variables.branchFrames = append(variables.branchFrames, workerVariableFrame{iteration: iteration, run: run})
+}
+
+func (variables *workerVariables) popBranch() {
+	if len(variables.branchFrames) == 0 {
+		return
+	}
+	variables.branchFrames = variables.branchFrames[:len(variables.branchFrames)-1]
 }
 
 func New(cfg Config) (*Engine, error) {
@@ -118,6 +180,7 @@ func New(cfg Config) (*Engine, error) {
 	}
 	engine.stats.Init(compiled.profile.maxWorkers)
 	engine.stats.initRequestSteps(compiled.profile.maxWorkers, requestStepDescriptors(compiled.steps))
+	engine.stats.initBranchRoutes(compiled.profile.maxWorkers, branchRouteDescriptors(compiled.executionPlan))
 
 	return engine, nil
 }
@@ -183,22 +246,38 @@ func (e *Engine) RequestStepSnapshots() []RequestStepSnapshot {
 	return e.stats.RequestStepSnapshots()
 }
 
+func (e *Engine) BranchRouteSnapshots() []BranchRouteSnapshot {
+	return e.stats.BranchRouteSnapshots()
+}
+
 type workerRuntime struct {
 	index            int
 	stats            *statsShard
 	sampleCountdown  int
 	variables        *workerVariables
 	assertionResults []bool
+	iterationIndex   uint64
+	loopIterations   []int
+	activeRoutes     []activeBranchRoute
+}
+
+type activeBranchRoute struct {
+	join         int
+	metricsIndex int
 }
 
 func (e *Engine) newWorkerRuntime(index int) workerRuntime {
-	return workerRuntime{
+	runtime := workerRuntime{
 		index:            index,
 		stats:            e.stats.Shard(index),
 		sampleCountdown:  e.cfg.latencySampleRate,
 		variables:        newWorkerVariablesWithRuntime(e.cfg.runtimeVariables),
 		assertionResults: make([]bool, e.cfg.assertionCount),
 	}
+	if e.cfg.executionPlan != nil {
+		runtime.loopIterations = make([]int, len(e.cfg.executionPlan.steps))
+	}
+	return runtime
 }
 
 type stepOutcome uint8
@@ -211,6 +290,10 @@ const (
 
 func (e *Engine) runIteration(ctx context.Context, runtime *workerRuntime) bool {
 	runtime.variables.beginIteration()
+	runtime.iterationIndex++
+	if e.cfg.executionPlan != nil {
+		return e.runPlannedIteration(ctx, runtime)
+	}
 	sampleLatency := runtime.nextLatencySample(e.cfg.latencySampleRate)
 	var lastStatus int
 	lastRequestMetricsIndex := -1
@@ -276,7 +359,11 @@ func (e *Engine) runStep(
 		}
 		countOnly := step.assertion.failureMode == AssertionCountOnly
 		runtime.stats.RecordScenarioAssertionFailure(step.assertion.typeName, countOnly)
-		if stepStats := e.stats.requestStepShard(*lastRequestMetricsIndex, runtime.index); stepStats != nil {
+		requestMetricsIndex := step.assertion.requestMetricsIndex
+		if requestMetricsIndex < 0 {
+			requestMetricsIndex = *lastRequestMetricsIndex
+		}
+		if stepStats := e.stats.requestStepShard(requestMetricsIndex, runtime.index); stepStats != nil {
 			stepStats.RecordScenarioAssertionFailure(step.assertion.typeName, countOnly)
 		}
 		if step.assertion.failureMode == AssertionStop {
@@ -332,6 +419,7 @@ func (e *Engine) runRequestStep(
 	}
 
 	if err != nil {
+		runtime.recordBranchRequest(&e.stats, false)
 		*lastStatus = 0
 		invalidateCaptures(step.captures, runtime.variables)
 		failure := ClassifyFailure(err)
@@ -342,11 +430,13 @@ func (e *Engine) runRequestStep(
 	} else {
 		*lastStatus = resp.StatusCode()
 		if isSuccessStatus(*lastStatus) {
+			runtime.recordBranchRequest(&e.stats, true)
 			runtime.stats.RecordHTTPSuccessSampled(latency, len(resp.Body()), step.requestBytes, sampleLatency, *lastStatus)
 			if stepStats != nil {
 				stepStats.RecordHTTPSuccessSampled(latency, sampleLatency, *lastStatus)
 			}
 		} else {
+			runtime.recordBranchRequest(&e.stats, false)
 			runtime.stats.RecordHTTPFailureSampled(latency, step.requestBytes, sampleLatency, FailureOther, *lastStatus)
 			if stepStats != nil {
 				stepStats.RecordHTTPFailureSampled(latency, sampleLatency, FailureOther, *lastStatus)

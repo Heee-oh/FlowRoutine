@@ -253,6 +253,42 @@ describe("scenario graph compilation", () => {
     expect(request.config.rampUpMs).toBe(0);
   });
 
+  it("builds a branch execution plan while retaining every runnable step payload", () => {
+    const entry = createFlowNode("request", 30, { url: "https://entry.example" });
+    const branch = createFlowNode("branch", 31, {
+      branchJoinNodeId: "join-34",
+      branchRoutesText: "request-32=2\nrequest-33=1",
+    });
+    const first = createFlowNode("request", 32, { url: "https://first.example" });
+    const second = createFlowNode("request", 33, { url: "https://second.example" });
+    const join = createFlowNode("join", 34, null);
+    const engine = createFlowNode("engine", 35, null);
+    const request = buildStartRequestFromGraph(
+      [engine, second, join, entry, branch, first],
+      [
+        { id: "entry-branch", source: entry.id, target: branch.id },
+        { id: "branch-first", source: branch.id, target: first.id },
+        { id: "branch-second", source: branch.id, target: second.id },
+        { id: "first-join", source: first.id, target: join.id },
+        { id: "second-join", source: second.id, target: join.id },
+        { id: "join-engine", source: join.id, target: engine.id },
+      ],
+      createRequest(),
+      {},
+    );
+
+    expect(request.config.scenarioSteps.map((step) => step.id).sort()).toEqual([
+      entry.id,
+      first.id,
+      second.id,
+    ].sort());
+    expect(request.config.executionPlan?.schemaVersion).toBe(1);
+    expect(request.config.executionPlan?.steps.find((step) => step.id === branch.id)?.routes).toEqual([
+      { id: first.id, name: "Request", targetStepId: first.id, weight: 2 },
+      { id: second.id, name: "Request", targetStepId: second.id, weight: 1 },
+    ]);
+  });
+
   it("compiles rich assertion settings into an executable scenario step", () => {
     const requestNode = createFlowNode("request", 20, { url: "https://example.com/items" });
     const assertionNode = createFlowNode("assertion", 21, {

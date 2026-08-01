@@ -274,8 +274,48 @@ func normalizeLoadConfigWithRuntime(config LoadConfig, runtimeBindings map[strin
 	if err != nil {
 		return LoadConfig{}, err
 	}
+	next.ExecutionPlan, err = normalizeExecutionPlan(config.ExecutionPlan)
+	if err != nil {
+		return LoadConfig{}, err
+	}
+	if scenarioStepsBytes(next.ScenarioSteps)+executionPlanBytes(next.ExecutionPlan) > MaxScenarioBytes {
+		return LoadConfig{}, fmt.Errorf("scenario and execution plan must total at most %d bytes", MaxScenarioBytes)
+	}
 	if err := engine.ValidateConfig(next.toEngineConfigWithRuntime(runtimeBindings)); err != nil {
 		return LoadConfig{}, fmt.Errorf("scenario configuration: %w", err)
+	}
+	return next, nil
+}
+
+func normalizeExecutionPlan(plan *ExecutionPlan) (*ExecutionPlan, error) {
+	if plan == nil {
+		return nil, nil
+	}
+	if len(plan.Steps) == 0 || len(plan.Steps) > engine.MaxExecutionPlanSteps {
+		return nil, fmt.Errorf("execution plan must have between 1 and %d steps", engine.MaxExecutionPlanSteps)
+	}
+	next := &ExecutionPlan{
+		SchemaVersion: plan.SchemaVersion,
+		EntryStepID:   strings.TrimSpace(plan.EntryStepID),
+		Steps:         make([]ExecutionPlanStep, len(plan.Steps)),
+	}
+	for index, step := range plan.Steps {
+		nextStep := step
+		nextStep.ID = strings.TrimSpace(step.ID)
+		nextStep.Kind = strings.TrimSpace(step.Kind)
+		nextStep.NextStepID = strings.TrimSpace(step.NextStepID)
+		nextStep.RequestStepID = strings.TrimSpace(step.RequestStepID)
+		nextStep.JoinStepID = strings.TrimSpace(step.JoinStepID)
+		nextStep.BodyStepID = strings.TrimSpace(step.BodyStepID)
+		nextStep.ExitStepID = strings.TrimSpace(step.ExitStepID)
+		nextStep.Routes = make([]ExecutionRoute, len(step.Routes))
+		for routeIndex, route := range step.Routes {
+			nextStep.Routes[routeIndex] = ExecutionRoute{
+				ID: strings.TrimSpace(route.ID), Name: strings.TrimSpace(route.Name),
+				TargetStepID: strings.TrimSpace(route.TargetStepID), Weight: route.Weight,
+			}
+		}
+		next.Steps[index] = nextStep
 	}
 	return next, nil
 }
@@ -596,6 +636,29 @@ func scenarioStepBytes(step ScenarioStep) int {
 	return total
 }
 
+func scenarioStepsBytes(steps []ScenarioStep) int {
+	total := 0
+	for _, step := range steps {
+		total += scenarioStepBytes(step)
+	}
+	return total
+}
+
+func executionPlanBytes(plan *ExecutionPlan) int {
+	if plan == nil {
+		return 0
+	}
+	total := len(plan.EntryStepID)
+	for _, step := range plan.Steps {
+		total += len(step.ID) + len(step.Kind) + len(step.NextStepID) + len(step.RequestStepID) +
+			len(step.JoinStepID) + len(step.BodyStepID) + len(step.ExitStepID)
+		for _, route := range step.Routes {
+			total += len(route.ID) + len(route.Name) + len(route.TargetStepID)
+		}
+	}
+	return total
+}
+
 func validateScenarioStepText(name string, value string, maximum int) error {
 	if !utf8.ValidString(value) {
 		return fmt.Errorf("%s must be valid UTF-8", name)
@@ -675,6 +738,13 @@ func estimateResources(config LoadConfig) (PreflightEstimate, error) {
 	sharedBytes := len(config.URL) + len(config.Method) + len(config.Body)
 	_, baseHeaderBytes, _ := normalizeHeaders("headers", config.Headers)
 	sharedBytes += baseHeaderBytes
+	sharedBytes += executionPlanBytes(config.ExecutionPlan)
+	branchRoutes := 0
+	if config.ExecutionPlan != nil {
+		for _, step := range config.ExecutionPlan.Steps {
+			branchRoutes += len(step.Routes)
+		}
+	}
 
 	if len(config.ScenarioSteps) == 0 {
 		host, _ := validateHTTPURL("url", config.URL)
@@ -715,7 +785,8 @@ func estimateResources(config LoadConfig) (PreflightEstimate, error) {
 	)
 	memoryBytes := uint64(sharedBytes) +
 		uint64(config.VirtualUsers)*perWorkerBytes +
-		engine.EstimateStepMetricsBytes(requestSteps, config.VirtualUsers)
+		engine.EstimateStepMetricsBytes(requestSteps, config.VirtualUsers) +
+		engine.EstimateBranchMetricsBytes(branchRoutes, config.VirtualUsers)
 	if memoryBytes > MaxEstimatedMemoryBytes {
 		return PreflightEstimate{}, fmt.Errorf(
 			"estimated peak memory %s exceeds the %s safety limit; reduce virtual users, scenario steps, response limit, or body size",

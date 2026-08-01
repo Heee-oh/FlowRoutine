@@ -19,8 +19,10 @@ export const ScenarioPath = memo(function ScenarioPath({
       aria-label="Scenario execution path"
     >
       <div className="scenario-path-heading">
-        <span>Execution path</span>
-        <small>{validation.compiled ? `${validation.compiled.path.length} nodes` : "Invalid graph"}</small>
+        <span>{validation.compiled?.executionPlan ? "Execution plan" : "Execution path"}</span>
+        <small>{validation.compiled
+          ? `${validation.compiled.path.length} nodes${validation.compiled.executionPlan ? " · schema v1" : ""}`
+          : "Invalid graph"}</small>
       </div>
       {validation.compiled ? (
         <div className="scenario-path-steps">

@@ -252,11 +252,15 @@ func (worker *WorkerServer) handleSnapshot(response http.ResponseWriter, request
 
 	snapshot := engine.Snapshot{}
 	var steps []engine.RequestStepSnapshot
+	var branches []engine.BranchRouteSnapshot
 	if loadEngine != nil {
 		snapshot = loadEngine.Snapshot()
 		steps = loadEngine.RequestStepSnapshots()
+		branches = loadEngine.BranchRouteSnapshots()
 	}
-	writeJSON(response, http.StatusOK, SnapshotResponse{Status: status, Snapshot: snapshot, RequestSteps: steps})
+	writeJSON(response, http.StatusOK, SnapshotResponse{
+		Status: status, Snapshot: snapshot, RequestSteps: steps, BranchRoutes: branches,
+	})
 }
 
 func (worker *WorkerServer) handleStop(response http.ResponseWriter, request *http.Request) {

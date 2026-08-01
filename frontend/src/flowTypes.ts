@@ -36,14 +36,23 @@ export type RuntimeEnvironment = {
   resolveSecrets?: boolean;
 };
 
-export type FlowNodeKind = "request" | "engine" | "assertion" | "delay" | "metrics" | "window";
+export type FlowNodeKind =
+  | "request"
+  | "engine"
+  | "assertion"
+  | "delay"
+  | "branch"
+  | "join"
+  | "loop"
+  | "metrics"
+  | "window";
 
 export type FlowNodeData = {
   label: string;
   value: string;
   caption: string;
   kind: FlowNodeKind;
-  tone: "source" | "engine" | "metrics" | "window" | "assertion" | "delay";
+  tone: "source" | "engine" | "metrics" | "window" | "assertion" | "delay" | "branch" | "join" | "loop";
   url?: string;
   method?: string;
   headersText?: string;
@@ -81,6 +90,10 @@ export type FlowNodeData = {
   assertionMaxLatencyMs?: number;
   assertionFailureMode?: NonNullable<AssertionDefinition["failureMode"]>;
   delayMs?: number;
+  branchJoinNodeId?: string;
+  branchRoutesText?: string;
+  loopBodyTargetId?: string;
+  loopMaxIterations?: number;
   validationError?: string;
   executionOrder?: number;
   onDelete?: (id: string) => void;

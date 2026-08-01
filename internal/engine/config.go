@@ -14,19 +14,24 @@ import (
 )
 
 const (
-	DefaultMethod            = "GET"
-	DefaultVirtualUsers      = 1
-	DefaultRequestTimeout    = 5 * time.Second
-	DefaultMaxConnsPerHost   = 10_000
-	DefaultLatencySampleRate = 1
-	MaxRateLimitRPS          = 10_000_000
-	MaxScenarioSteps         = 512
-	MaxScenarioStepIDBytes   = 128
-	MaxScenarioStepNameBytes = 256
-	MaxAssertionSubjectBytes = 1_024
-	MaxAssertionValueBytes   = 4_096
-	MaxRuntimeVariables      = 256
-	MaxRuntimeVariableBytes  = 64 << 10
+	DefaultMethod                       = "GET"
+	DefaultVirtualUsers                 = 1
+	DefaultRequestTimeout               = 5 * time.Second
+	DefaultMaxConnsPerHost              = 10_000
+	DefaultLatencySampleRate            = 1
+	MaxRateLimitRPS                     = 10_000_000
+	MaxScenarioSteps                    = 512
+	MaxScenarioStepIDBytes              = 128
+	MaxScenarioStepNameBytes            = 256
+	MaxAssertionSubjectBytes            = 1_024
+	MaxAssertionValueBytes              = 4_096
+	MaxRuntimeVariables                 = 256
+	MaxRuntimeVariableBytes             = 64 << 10
+	ExecutionPlanSchemaVersion          = 1
+	MaxExecutionPlanSteps               = 1_024
+	MaxBranchRoutes                     = 32
+	MaxLoopIterations                   = 1_000
+	MaxExecutionTransitionsPerIteration = 100_000
 )
 
 type Header struct {
@@ -51,7 +56,42 @@ type Config struct {
 	RampUp            time.Duration
 	Profile           *LoadProfile
 	ScenarioSteps     []ScenarioStep
+	ExecutionPlan     *ExecutionPlan
 	RuntimeVariables  map[string]string
+}
+
+type ExecutionPlan struct {
+	SchemaVersion int
+	EntryStepID   string
+	Steps         []ExecutionPlanStep
+}
+
+type ExecutionPlanStepKind string
+
+const (
+	ExecutionStepScenario ExecutionPlanStepKind = "step"
+	ExecutionStepBranch   ExecutionPlanStepKind = "branch"
+	ExecutionStepJoin     ExecutionPlanStepKind = "join"
+	ExecutionStepLoop     ExecutionPlanStepKind = "loop"
+)
+
+type ExecutionPlanStep struct {
+	ID            string
+	Kind          ExecutionPlanStepKind
+	NextStepID    string
+	RequestStepID string
+	Routes        []ExecutionRoute
+	JoinStepID    string
+	BodyStepID    string
+	ExitStepID    string
+	MaxIterations int
+}
+
+type ExecutionRoute struct {
+	ID           string
+	Name         string
+	TargetStepID string
+	Weight       int
 }
 
 type StepKind string
@@ -156,6 +196,7 @@ type compiledConfig struct {
 	rateLimitRPS      int
 	profile           compiledLoadProfile
 	steps             []compiledStep
+	executionPlan     *compiledExecutionPlan
 	clients           []compiledClient
 	assertionCount    int
 	runtimeVariables  map[string]string
@@ -201,17 +242,18 @@ type compiledRequestStep struct {
 }
 
 type compiledAssertion struct {
-	typeName        AssertionType
-	operator        AssertionOperator
-	headerName      []byte
-	jsonPath        []string
-	expectedString  string
-	expectedNumber  float64
-	expectedBoolean bool
-	valueType       AssertionValueType
-	maxLatency      time.Duration
-	failureMode     AssertionFailureMode
-	resultIndex     int
+	typeName            AssertionType
+	operator            AssertionOperator
+	headerName          []byte
+	jsonPath            []string
+	expectedString      string
+	expectedNumber      float64
+	expectedBoolean     bool
+	valueType           AssertionValueType
+	maxLatency          time.Duration
+	failureMode         AssertionFailureMode
+	resultIndex         int
+	requestMetricsIndex int
 }
 
 type compiledVariableCapture struct {
@@ -300,6 +342,10 @@ func compileConfig(cfg Config) (compiledConfig, error) {
 	if err != nil {
 		return compiledConfig{}, err
 	}
+	executionPlan, err := compileExecutionPlan(cfg.ExecutionPlan, steps, cfg.RuntimeVariables)
+	if err != nil {
+		return compiledConfig{}, err
+	}
 	firstRequest := firstCompiledRequest(steps)
 	if firstRequest.requestURI == nil {
 		return compiledConfig{}, errors.New("scenario requires at least one request step")
@@ -322,6 +368,7 @@ func compileConfig(cfg Config) (compiledConfig, error) {
 		rateLimitRPS:      cfg.RateLimitRPS,
 		profile:           profile,
 		steps:             steps,
+		executionPlan:     executionPlan,
 		clients:           clients,
 		assertionCount:    compiledAssertionCount(steps),
 		runtimeVariables:  runtimeVariables,
@@ -334,6 +381,9 @@ func ValidateConfig(cfg Config) error {
 }
 
 func compileScenarioSteps(cfg Config, defaultMethod string) ([]compiledStep, []compiledClient, error) {
+	if cfg.ExecutionPlan != nil {
+		return compilePlannedScenarioSteps(cfg, defaultMethod)
+	}
 	steps := cfg.ScenarioSteps
 	if len(steps) == 0 {
 		steps = []ScenarioStep{{
@@ -427,6 +477,7 @@ func compileScenarioSteps(cfg Config, defaultMethod string) ([]compiledStep, []c
 				return nil, nil, fmt.Errorf("scenario step %d assertion: %w", index+1, err)
 			}
 			assertion.resultIndex = assertionResultIndex
+			assertion.requestMetricsIndex = compiled[lastRequestIndex].request.metricsIndex
 			assertionResultIndex++
 			compiled[lastRequestIndex].request.assertions = append(
 				compiled[lastRequestIndex].request.assertions,
@@ -479,9 +530,10 @@ func compileAssertion(step ScenarioStep) (compiledAssertion, error) {
 	}
 
 	compiled := compiledAssertion{
-		typeName:    definition.Type,
-		operator:    definition.Operator,
-		failureMode: definition.FailureMode,
+		typeName:            definition.Type,
+		operator:            definition.Operator,
+		failureMode:         definition.FailureMode,
+		requestMetricsIndex: -1,
 	}
 	switch definition.Type {
 	case AssertionStatus:
