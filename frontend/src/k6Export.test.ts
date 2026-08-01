@@ -42,6 +42,22 @@ describe("buildK6Script", () => {
     expect(script).toContain("kept");
   });
 
+  it("preserves declared SECRET placeholders instead of renaming their k6 bindings", () => {
+    const request = createRequest();
+    request.config.scenarioSteps = [{
+      kind: "request",
+      method: "GET",
+      url: "https://example.com/items?access_token={{SECRET_API_TOKEN}}",
+      headers: [{ name: "Authorization", value: "Bearer {{SECRET_API_TOKEN}}" }],
+    }];
+
+    const script = buildK6Script(request);
+
+    expect(script).toContain("access_token={{SECRET_API_TOKEN}}");
+    expect(script).toContain("Bearer {{SECRET_API_TOKEN}}");
+    expect(script).not.toContain("{{SECRET_AUTHORIZATION}}");
+  });
+
   it("exports iteration-safe capture and template semantics", () => {
     const request = createRequest();
     request.config.scenarioSteps = [
@@ -427,7 +443,7 @@ describe("buildK6Script", () => {
         sleep(0.25);
         res = http.request("POST", render("https://example.com/items/{{token}}", iterationVars), render("{\\"token\\":\\"{{token}}\\"}", iterationVars), {
           headers: {
-            "Authorization": render("{{SECRET_AUTHORIZATION}}", iterationVars),
+            "Authorization": render("Bearer {{SECRET_AUTHORIZATION}}", iterationVars),
           },
           timeout: "1500ms",
         });

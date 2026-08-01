@@ -9,6 +9,7 @@ import {
   useNodesState,
 } from "@xyflow/react";
 import { FileCode, HelpCircle, Play, Square, Workflow } from "lucide-react";
+import { EnvironmentPanel } from "./components/EnvironmentPanel";
 import { FlowCanvas } from "./components/FlowCanvas";
 import { HelpDialog, OpenAPIImportDialog, StartConfirmDialog } from "./components/Dialogs";
 import { ImportPreviewDialog } from "./components/ImportPreviewDialog";
@@ -16,6 +17,13 @@ import { MetricGrid, MetricsChart } from "./components/Metrics";
 import { NodeInspector } from "./components/NodeInspector";
 import { NodePalette } from "./components/NodePalette";
 import { ScenarioPath } from "./components/ScenarioPath";
+import {
+  createEnvironmentProfile,
+  loadActiveEnvironmentId,
+  loadEnvironmentProfiles,
+  saveActiveEnvironmentId,
+  saveEnvironmentProfiles,
+} from "./environmentProfiles";
 import {
   assessStartSafety,
   buildStartRequestFromGraph,
@@ -31,7 +39,14 @@ import {
   reviveSavedNodes,
   saveScenario,
 } from "./flowModel";
-import type { FlowNodeData, FlowNodeKind, RuntimeAuthSecret, SafetyAssessment, SavedScenario } from "./flowTypes";
+import type {
+  EnvironmentProfile,
+  FlowNodeData,
+  FlowNodeKind,
+  RuntimeAuthSecret,
+  SafetyAssessment,
+  SavedScenario,
+} from "./flowTypes";
 import { validateScenarioGraph } from "./graphCompiler";
 import { parseHarArchive } from "./harImport";
 import type { HelpLanguage, HelpTopic } from "./help";
@@ -92,6 +107,9 @@ export function App() {
   const [importUndo, setImportUndo] = useState<ImportUndo | null>(null);
   const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>(loadSavedScenarios);
   const [authSecrets, setAuthSecrets] = useState<Record<string, RuntimeAuthSecret>>({});
+  const [environmentProfiles, setEnvironmentProfiles] = useState<EnvironmentProfile[]>(loadEnvironmentProfiles);
+  const [activeEnvironmentId, setActiveEnvironmentId] = useState<string | null>(loadActiveEnvironmentId);
+  const [environmentSecrets, setEnvironmentSecrets] = useState<Record<string, Record<string, string>>>({});
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<Node<FlowNodeData>>(initialFlowNodes);
   const [flowEdges, setFlowEdges, onFlowEdgesChange] = useEdgesState<Edge>(initialFlowEdges);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -100,6 +118,10 @@ export function App() {
   const selectedNode = useMemo(
     () => flowNodes.find((node) => node.id === selectedNodeId) ?? null,
     [flowNodes, selectedNodeId],
+  );
+  const activeEnvironment = useMemo(
+    () => environmentProfiles.find((profile) => profile.id === activeEnvironmentId) ?? null,
+    [activeEnvironmentId, environmentProfiles],
   );
   const graphValidation = useMemo(
     () => validateScenarioGraph(flowNodes, flowEdges),
@@ -174,14 +196,73 @@ export function App() {
     setFlowNodes((currentNodes) => currentNodes.concat(createFlowNode(kind, index, null, undefined, handleDeleteNode)));
   }, [handleDeleteNode, setFlowNodes]);
 
+  const handleSelectEnvironment = useCallback((id: string | null) => {
+    setActiveEnvironmentId(id);
+    saveActiveEnvironmentId(id);
+  }, []);
+
+  const handleAddEnvironment = useCallback(() => {
+    const profile = createEnvironmentProfile(environmentProfiles.length + 1);
+    const next = environmentProfiles.concat(profile);
+    setEnvironmentProfiles(next);
+    saveEnvironmentProfiles(next);
+    handleSelectEnvironment(profile.id);
+  }, [environmentProfiles, handleSelectEnvironment]);
+
+  const handleUpdateEnvironment = useCallback((profile: EnvironmentProfile) => {
+    setEnvironmentProfiles((current) => {
+      const next = current.map((item) => item.id === profile.id ? profile : item);
+      saveEnvironmentProfiles(next);
+      return next;
+    });
+  }, []);
+
+  const handleDeleteEnvironment = useCallback((id: string) => {
+    setEnvironmentProfiles((current) => {
+      const next = current.filter((profile) => profile.id !== id);
+      saveEnvironmentProfiles(next);
+      return next;
+    });
+    setEnvironmentSecrets((current) => {
+      const { [id]: _deleted, ...next } = current;
+      return next;
+    });
+    if (activeEnvironmentId === id) {
+      handleSelectEnvironment(null);
+    }
+  }, [activeEnvironmentId, handleSelectEnvironment]);
+
+  const handleUpdateEnvironmentSecret = useCallback((name: string, value: string) => {
+    if (!activeEnvironmentId || !name) {
+      return;
+    }
+    setEnvironmentSecrets((current) => {
+      const bindings = { ...current[activeEnvironmentId] };
+      if (value) {
+        bindings[name] = value;
+      } else {
+        delete bindings[name];
+      }
+      return { ...current, [activeEnvironmentId]: bindings };
+    });
+  }, [activeEnvironmentId]);
+
   const handleLoadScenario = useCallback((scenario: SavedScenario) => {
     const nodes = reviveSavedNodes(scenario.nodes, handleDeleteNode);
     setFlowNodes(nodes);
     setFlowEdges(scenario.edges);
     setSelectedNodeId(null);
     setAuthSecrets({});
+    if (scenario.environmentProfileId) {
+      if (environmentProfiles.some((profile) => profile.id === scenario.environmentProfileId)) {
+        handleSelectEnvironment(scenario.environmentProfileId);
+      } else {
+        handleSelectEnvironment(null);
+        setError("The environment profile saved with this scenario is unavailable; select another profile.");
+      }
+    }
     nextNodeIndex.current = nextNodeIndexFromNodes(nodes);
-  }, [handleDeleteNode, setFlowEdges, setFlowNodes]);
+  }, [environmentProfiles, handleDeleteNode, handleSelectEnvironment, setError, setFlowEdges, setFlowNodes]);
 
   const updateAuthSecret = useCallback((nodeId: string, patch: Partial<RuntimeAuthSecret>) => {
     setAuthSecrets((current) => ({
@@ -267,6 +348,10 @@ export function App() {
         flowEdges,
         buildStartRequest(),
         authSecrets,
+        {
+          profile: activeEnvironment,
+          secretBindings: activeEnvironment ? environmentSecrets[activeEnvironment.id] : undefined,
+        },
       );
       const preflight = await preflightLoad(requested);
       const request: StartRequest = {
@@ -277,7 +362,7 @@ export function App() {
         },
         batchIntervalMs: preflight.effectiveBatchIntervalMs,
       };
-      const scenario = createSavedScenario(flowNodes, flowEdges, request);
+      const scenario = createSavedScenario(flowNodes, flowEdges, request, activeEnvironment?.id);
       const assessment = assessStartSafety(request.config, preflight);
       if (assessment.confirmationRequired) {
         setPendingStart(request);
@@ -292,7 +377,7 @@ export function App() {
       setStopping(false);
       setError(err instanceof Error ? err.message : "Failed to start load test");
     }
-  }, [assertGraphValid, authSecrets, buildStartRequest, executeStart, flowEdges, flowNodes, setError, setRunning, setStopping]);
+  }, [activeEnvironment, assertGraphValid, authSecrets, buildStartRequest, environmentSecrets, executeStart, flowEdges, flowNodes, setError, setRunning, setStopping]);
 
   const handleStop = useCallback(async () => {
     if (stopping) {
@@ -318,12 +403,16 @@ export function App() {
         flowEdges,
         buildStartRequest(),
         authSecrets,
+        {
+          profile: activeEnvironment,
+          resolveSecrets: false,
+        },
       );
       downloadK6Script(request);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to export k6 script");
     }
-  }, [assertGraphValid, authSecrets, buildStartRequest, flowEdges, flowNodes, setError]);
+  }, [activeEnvironment, assertGraphValid, authSecrets, buildStartRequest, flowEdges, flowNodes, setError]);
 
   const handleConfirmStart = useCallback(() => {
     if (!pendingStart) {
@@ -496,6 +585,18 @@ export function App() {
             <p>HTTP target load runner</p>
           </div>
         </div>
+
+        <EnvironmentPanel
+          profiles={environmentProfiles}
+          activeProfile={activeEnvironment}
+          secretBindings={activeEnvironment ? environmentSecrets[activeEnvironment.id] ?? {} : {}}
+          disabled={running || stopping}
+          onAdd={handleAddEnvironment}
+          onDelete={handleDeleteEnvironment}
+          onSelect={handleSelectEnvironment}
+          onUpdate={handleUpdateEnvironment}
+          onUpdateSecret={handleUpdateEnvironmentSecret}
+        />
 
         <section className="panel">
           <NodeInspector

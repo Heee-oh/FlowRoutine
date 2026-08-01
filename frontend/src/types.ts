@@ -78,6 +78,7 @@ export type StartRequest = {
   config: LoadConfig;
   batchIntervalMs: number;
   qualityGate?: QualityGate;
+  runtimeSecretValues?: string[];
 };
 
 export type StartResponse = {

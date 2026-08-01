@@ -156,6 +156,7 @@ const maxBaselines = 24;
 
 export function buildRunReport(request: StartRequest, metrics: RunReportMetrics): RunReport {
   const finalBatch = metrics.finalBatch ?? emptyBatch();
+  const runtimeSecretValues = request.runtimeSecretValues ?? [];
   const runLatency = finalBatch.runLatency;
   const qualityGate = normalizeQualityGate(request.qualityGate);
   const startedAtUnixMs = validTimestamp(finalBatch.startedAtUnixMs)
@@ -170,7 +171,7 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
     schemaVersion: 8,
     generatedAtUnixMs: Date.now(),
     run: {
-      targetUrl: redactSensitiveURL(request.config.url),
+      targetUrl: redactReportText(request.config.url, runtimeSecretValues),
       method: request.config.method,
       startedAtUnixMs,
       finishedAtUnixMs,
@@ -194,9 +195,9 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
       } : undefined,
       batchIntervalMs: request.batchIntervalMs,
       qualityGate,
-      headers: redactHeaders(request.config.headers),
+      headers: redactReportHeaders(request.config.headers, runtimeSecretValues),
       bodyBytes: byteLength(request.config.body),
-      scenarioSteps: request.config.scenarioSteps.map(redactScenarioStep),
+      scenarioSteps: request.config.scenarioSteps.map((step) => redactScenarioStep(step, runtimeSecretValues)),
     },
     summary: {
       averageRps,
@@ -236,7 +237,7 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
         code: status.code,
         count: status.count,
       })),
-      requestSteps: (finalBatch.stepMetrics ?? []).map(redactRequestStepMetrics),
+      requestSteps: (finalBatch.stepMetrics ?? []).map((step) => redactRequestStepMetrics(step, runtimeSecretValues)),
     },
     qualityGate: evaluateQualityGate(qualityGate, finalBatch, averageRps),
     baseline: {
@@ -361,19 +362,20 @@ function nonNegative(value: number | undefined, fallback: number) {
 }
 
 function baselineKey(request: StartRequest) {
+  const runtimeSecretValues = request.runtimeSecretValues ?? [];
   const scenarioSignature = request.config.scenarioSteps
     .map((step) => [
       step.kind,
       step.method ?? "",
-      canonicalURL(step.url ?? ""),
+      canonicalURL(redactRuntimeSecrets(step.url ?? "", runtimeSecretValues)),
       step.delayMs ?? "",
       step.expectedStatus ?? "",
-      JSON.stringify(step.assertion ? redactAssertion(step.assertion) : null),
+      JSON.stringify(step.assertion ? redactAssertion(step.assertion, runtimeSecretValues) : null),
     ].join(":"))
     .join("|");
   return stableHash([
     request.config.method,
-    canonicalURL(request.config.url),
+    canonicalURL(redactRuntimeSecrets(request.config.url, runtimeSecretValues)),
     scenarioSignature,
   ].join("|"));
 }
@@ -532,15 +534,15 @@ export function downloadRunReport(report: RunReport) {
   URL.revokeObjectURL(url);
 }
 
-function redactScenarioStep(step: ScenarioStep): ReportScenarioStep {
+function redactScenarioStep(step: ScenarioStep, runtimeSecretValues: readonly string[]): ReportScenarioStep {
   if (step.kind === "request") {
     return {
       id: step.id,
-      name: step.name ? redactSensitiveURL(step.name) : undefined,
+      name: step.name ? redactReportText(step.name, runtimeSecretValues) : undefined,
       kind: step.kind,
-      url: redactSensitiveURL(step.url ?? ""),
+      url: redactReportText(step.url ?? "", runtimeSecretValues),
       method: step.method,
-      headers: redactHeaders(step.headers ?? []),
+      headers: redactReportHeaders(step.headers ?? [], runtimeSecretValues),
       bodyBytes: byteLength(step.body ?? ""),
       captures: (step.captures ?? []).map((capture) => ({
         name: capture.name,
@@ -553,21 +555,24 @@ function redactScenarioStep(step: ScenarioStep): ReportScenarioStep {
   if (step.kind === "delay") {
     return {
       id: step.id,
-      name: step.name,
+      name: step.name ? redactRuntimeSecrets(step.name, runtimeSecretValues) : undefined,
       kind: step.kind,
       delayMs: step.delayMs,
     };
   }
   return {
     id: step.id,
-    name: step.name,
+    name: step.name ? redactRuntimeSecrets(step.name, runtimeSecretValues) : undefined,
     kind: step.kind,
     expectedStatus: step.expectedStatus,
-    assertion: step.assertion ? redactAssertion(step.assertion) : undefined,
+    assertion: step.assertion ? redactAssertion(step.assertion, runtimeSecretValues) : undefined,
   };
 }
 
-function redactAssertion(assertion: AssertionDefinition): AssertionDefinition {
+function redactAssertion(
+  assertion: AssertionDefinition,
+  runtimeSecretValues: readonly string[],
+): AssertionDefinition {
   const sensitiveHeader = assertion.type === "header" && (
     isSensitiveHeaderName(assertion.headerName ?? "") || isSensitiveHeaderValue(assertion.expected ?? "")
   );
@@ -577,7 +582,12 @@ function redactAssertion(assertion: AssertionDefinition): AssertionDefinition {
   if (sensitiveHeader || sensitiveJSON) {
     return { ...assertion, expected: assertion.expected ? "<redacted>" : assertion.expected };
   }
-  return { ...assertion };
+  return {
+    ...assertion,
+    expected: assertion.expected === undefined
+      ? undefined
+      : redactRuntimeSecrets(assertion.expected, runtimeSecretValues),
+  };
 }
 
 function normalizedAssertionFailures(counts: AssertionFailureCounts | undefined): AssertionFailureCounts {
@@ -591,16 +601,40 @@ function normalizedAssertionFailures(counts: AssertionFailureCounts | undefined)
   };
 }
 
-function redactRequestStepMetrics(step: RequestStepMetrics): RequestStepMetrics {
+function redactRequestStepMetrics(
+  step: RequestStepMetrics,
+  runtimeSecretValues: readonly string[],
+): RequestStepMetrics {
   return {
     ...step,
-    name: redactSensitiveURL(step.name),
+    name: redactReportText(step.name, runtimeSecretValues),
     runLatency: { ...step.runLatency },
     statusCodes: step.statusCodes.map((status) => ({ ...status })),
     ...(step.assertionFailuresByType
       ? { assertionFailuresByType: normalizedAssertionFailures(step.assertionFailuresByType) }
       : {}),
   };
+}
+
+function redactReportHeaders(headers: Header[], runtimeSecretValues: readonly string[]) {
+  return redactHeaders(headers).map((header) => ({
+    name: redactRuntimeSecrets(header.name, runtimeSecretValues),
+    value: redactRuntimeSecrets(header.value, runtimeSecretValues),
+  }));
+}
+
+function redactReportText(value: string, runtimeSecretValues: readonly string[]) {
+  return redactRuntimeSecrets(redactSensitiveURL(value), runtimeSecretValues);
+}
+
+function redactRuntimeSecrets(value: string, runtimeSecretValues: readonly string[]) {
+  let redacted = value;
+  for (const secret of runtimeSecretValues) {
+    if (secret) {
+      redacted = redacted.split(secret).join("<redacted>");
+    }
+  }
+  return redacted;
 }
 
 function byteLength(value: string) {

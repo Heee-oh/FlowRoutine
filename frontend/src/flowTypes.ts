@@ -17,6 +17,25 @@ export type RuntimeAuthSecret = {
   bindings?: Record<string, string>;
 };
 
+export type EnvironmentVariable = {
+  name: string;
+  value: string;
+};
+
+export type EnvironmentProfile = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  variables: EnvironmentVariable[];
+  secretNames: string[];
+};
+
+export type RuntimeEnvironment = {
+  profile?: EnvironmentProfile | null;
+  secretBindings?: Record<string, string>;
+  resolveSecrets?: boolean;
+};
+
 export type FlowNodeKind = "request" | "engine" | "assertion" | "delay" | "metrics" | "window";
 
 export type FlowNodeData = {
@@ -93,6 +112,7 @@ export type SavedScenario = {
   id: string;
   name: string;
   savedAtUnixMs: number;
+  environmentProfileId?: string;
   nodes: Node<FlowNodeData>[];
   edges: Edge[];
 };

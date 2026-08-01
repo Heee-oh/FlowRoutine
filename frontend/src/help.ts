@@ -5,6 +5,7 @@ export type HelpLanguage = "ko" | "en";
 export type HelpItem = { title: string; description: Record<HelpLanguage, string> };
 
 export const overviewHelpItems: HelpItem[] = [
+  helpItem("Environment", "Select a named base URL and non-secret variables. SECRET_* bindings are masked and stay in memory only.", "이름이 있는 base URL과 일반 변수를 선택합니다. SECRET_* binding은 가려서 표시되며 메모리에만 보관됩니다."),
   helpItem("Request", "Target URL, method, headers, and body for HTTP traffic.", "부하 테스트에서 보낼 HTTP 요청의 URL, method, headers, body입니다."),
   helpItem("Engine", "Staged VU or arrival-rate profiles, timeout, connection cap, and request RPS cap.", "단계형 VU 또는 arrival-rate profile, timeout, max conns, request RPS limit을 제어합니다."),
   helpItem("Assert", "Checks response status, headers, typed JSON values, or response and step latency.", "응답 status, header, typed JSON 값, response/step latency를 확인합니다."),
@@ -17,7 +18,7 @@ export const overviewHelpItems: HelpItem[] = [
 
 export const nodeHelpItems: Record<FlowNodeKind, HelpItem[]> = {
   request: [
-    helpItem("Target URL", "HTTP or HTTPS endpoint that receives generated traffic.", "생성된 traffic을 받을 HTTP 또는 HTTPS endpoint입니다."),
+    helpItem("Target URL", "HTTP or HTTPS endpoint that receives generated traffic. Use {{BASE_URL}} or other uppercase environment variables to switch profiles.", "생성된 traffic을 받을 HTTP 또는 HTTPS endpoint입니다. Profile 전환에는 {{BASE_URL}} 또는 다른 대문자 환경 변수를 사용합니다."),
     helpItem("Method", "HTTP verb used for the request step.", "Request step에서 사용할 HTTP verb입니다."),
     helpItem("Auth", "Adds Bearer token, Cookie, or API key headers at run time. Secret values are kept in memory only.", "실행 시 Bearer token, Cookie, API key header를 자동으로 추가합니다. Secret 값은 메모리에만 보관됩니다."),
     helpItem("Headers", "Use Direct mode for raw Name: Value lines, or Form mode to add common headers one by one.", "Direct 모드는 Name: Value를 직접 입력합니다. Form 모드는 자주 쓰는 header를 한 줄씩 추가해서 입력합니다."),
