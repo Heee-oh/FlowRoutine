@@ -88,6 +88,35 @@ func TestEngineRateLimit(t *testing.T) {
 	}
 }
 
+func TestEngineStopCancelsManyRateLimitedWorkers(t *testing.T) {
+	engine, err := New(Config{
+		URL:              "http://127.0.0.1:1",
+		VirtualUsers:     2_048,
+		RequestTimeout:   10 * time.Millisecond,
+		MaxConnsPerHost:  DefaultMaxConnsPerHost,
+		MaxResponseBytes: 1024,
+		RateLimitRPS:     1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	startedAt := time.Now()
+	if err := engine.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf("stopping rate-limited workers took %s", elapsed)
+	}
+	if engine.Running() {
+		t.Fatal("engine should be stopped")
+	}
+}
+
 func TestEngineStopDuringRampUp(t *testing.T) {
 	engine, err := New(Config{
 		URL:              "http://127.0.0.1:1",

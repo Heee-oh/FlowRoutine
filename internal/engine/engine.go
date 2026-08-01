@@ -127,10 +127,18 @@ func (e *Engine) Start(parent context.Context) error {
 	e.cancel = cancel
 	e.done = make(chan struct{})
 	e.stats.Reset(time.Now())
+	goroutines := e.cfg.virtualUsers
 	if e.limiter != nil {
-		e.limiter.Reset(time.Now())
+		e.limiter.Reset()
+		goroutines++
 	}
-	e.wg.Add(e.cfg.virtualUsers)
+	e.wg.Add(goroutines)
+	if e.limiter != nil {
+		go func() {
+			defer e.wg.Done()
+			e.limiter.Run(ctx)
+		}()
+	}
 	for i := 0; i < e.cfg.virtualUsers; i++ {
 		go e.worker(ctx, i)
 	}

@@ -16,6 +16,7 @@ const (
 	DefaultRequestTimeout    = 5 * time.Second
 	DefaultMaxConnsPerHost   = 10_000
 	DefaultLatencySampleRate = 1
+	MaxRateLimitRPS          = 10_000_000
 )
 
 type Header struct {
@@ -178,8 +179,12 @@ func compileConfig(cfg Config) (compiledConfig, error) {
 	if cfg.LatencySampleRate < 0 {
 		return compiledConfig{}, fmt.Errorf("latency sample rate must be >= 0: %d", cfg.LatencySampleRate)
 	}
-	if cfg.RateLimitRPS < 0 {
-		return compiledConfig{}, fmt.Errorf("rate limit rps must be >= 0: %d", cfg.RateLimitRPS)
+	if cfg.RateLimitRPS < 0 || cfg.RateLimitRPS > MaxRateLimitRPS {
+		return compiledConfig{}, fmt.Errorf(
+			"rate limit rps must be between 0 and %d: %d",
+			MaxRateLimitRPS,
+			cfg.RateLimitRPS,
+		)
 	}
 
 	method := cfg.Method

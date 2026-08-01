@@ -38,7 +38,7 @@ const (
 	MaxCaptureNameBytes      = 128
 	MaxCapturePathBytes      = 1 << 10
 	MaxLatencySampleRate     = 1_000_000
-	MaxRateLimitRPS          = 10_000_000
+	MaxRateLimitRPS          = engine.MaxRateLimitRPS
 	MaxEstimatedConnections  = 50_000
 	WorkerMemoryOverhead     = 64 << 10
 )
