@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { createScenarioSnapshot, initialFlowEdges, initialFlowNodes } from "../flowModel";
+import { initialFlowEdges, initialFlowNodes } from "../flowModel";
+import { createScenarioSnapshot } from "../scenarioPersistence";
 import { ScenarioLibraryPanel } from "./ScenarioLibraryPanel";
 
 describe("ScenarioLibraryPanel", () => {

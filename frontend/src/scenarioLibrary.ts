@@ -1,6 +1,6 @@
 import type { Edge, Node } from "@xyflow/react";
 
-import { sanitizeSavedScenario } from "./flowModel";
+import { sanitizeSavedScenario } from "./scenarioPersistence";
 import type { FlowNodeData, SavedScenario, ScenarioDraft } from "./flowTypes";
 
 export const SCENARIO_SCHEMA_VERSION = 2 as const;
