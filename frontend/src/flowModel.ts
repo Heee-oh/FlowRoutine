@@ -52,8 +52,6 @@ export const commonHeaderNames = [
   "X-Request-Id",
 ];
 
-const savedScenariosKey = "flowroutine:saved-scenarios";
-const maxSavedScenarios = 12;
 const scenarioStepNameBytes = 256;
 const textEncoder = new TextEncoder();
 
@@ -264,63 +262,47 @@ function qualityGateFromMetricsNode(metricsNode: Node<FlowNodeData> | undefined)
   };
 }
 
-export function loadSavedScenarios(): SavedScenario[] {
-  if (typeof window === "undefined") {
-    return [];
-  }
-  try {
-    const raw = window.localStorage.getItem(savedScenariosKey);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    const scenarios = Array.isArray(parsed)
-      ? parsed.filter(isSavedScenario).slice(0, maxSavedScenarios).map(sanitizeSavedScenario)
-      : [];
-    const serialized = JSON.stringify(scenarios);
-    if (raw !== serialized) {
-      try {
-        window.localStorage.setItem(savedScenariosKey, serialized);
-      } catch {
-        try {
-          window.localStorage.removeItem(savedScenariosKey);
-        } catch {
-          // Return sanitized in-memory data even when storage is unavailable.
-        }
-      }
-    }
-    return scenarios;
-  } catch {
-    return [];
-  }
-}
-
-export function saveScenario(scenario: SavedScenario) {
-  const sanitized = sanitizeSavedScenario(scenario);
-  const scenarios = [sanitized, ...loadSavedScenarios().filter((item) => item.id !== sanitized.id)].slice(0, maxSavedScenarios);
-  if (typeof window !== "undefined") {
-    try {
-      window.localStorage.setItem(savedScenariosKey, JSON.stringify(scenarios));
-    } catch {
-      // Running should not depend on history persistence.
-    }
-  }
-  return scenarios;
-}
+export type ScenarioSnapshotMetadata = {
+  id?: string;
+  name?: string;
+  tags?: string[];
+  createdAtUnixMs?: number;
+  environmentProfileId?: string;
+};
 
 export function createSavedScenario(
   nodes: Node<FlowNodeData>[],
   edges: Edge[],
   request: StartRequest,
   environmentProfileId?: string,
+  metadata?: ScenarioSnapshotMetadata,
 ): SavedScenario {
   const method = request.config.method || "GET";
   const target = persistedTargetName(request.config.url);
-  return {
-    id: `${Date.now()}`,
-    name: `${method} ${target}`,
-    savedAtUnixMs: Date.now(),
-    ...(environmentProfileId ? { environmentProfileId } : {}),
+  return createScenarioSnapshot(nodes, edges, {
+    ...metadata,
+    name: metadata?.name?.trim() || `${method} ${target}`,
+    environmentProfileId: environmentProfileId ?? metadata?.environmentProfileId,
+  });
+}
+
+export function createScenarioSnapshot(
+  nodes: Node<FlowNodeData>[],
+  edges: Edge[],
+  metadata: ScenarioSnapshotMetadata = {},
+): SavedScenario {
+  const now = Date.now();
+  return sanitizeSavedScenario({
+    schemaVersion: 2,
+    id: metadata.id?.trim() || newScenarioID(now),
+    name: metadata.name?.trim() || "Untitled scenario",
+    tags: metadata.tags ?? [],
+    createdAtUnixMs: metadata.createdAtUnixMs ?? now,
+    updatedAtUnixMs: now,
+    ...(metadata.environmentProfileId ? { environmentProfileId: metadata.environmentProfileId } : {}),
     nodes: nodes.map(stripRuntimeNode),
     edges: edges.map(stripRuntimeEdge),
-  };
+  });
 }
 
 export function reviveSavedNodes(nodes: Node<FlowNodeData>[], onDelete: (id: string) => void) {
@@ -866,7 +848,7 @@ function parseHeaderText(raw: string): Header[] {
     });
 }
 
-function stripRuntimeNode(node: Node<FlowNodeData>): Node<FlowNodeData> {
+export function stripRuntimeNode(node: Node<FlowNodeData>): Node<FlowNodeData> {
   const {
     executionOrder: _executionOrder,
     onDelete: _onDelete,
@@ -906,14 +888,17 @@ function stripSecretFields(data: FlowNodeData): FlowNodeData {
   return sanitized;
 }
 
-function sanitizeSavedScenario(scenario: SavedScenario): SavedScenario {
+export function sanitizeSavedScenario(scenario: SavedScenario): SavedScenario {
   const environmentProfileId = typeof scenario.environmentProfileId === "string"
     ? scenario.environmentProfileId.trim()
     : "";
   return {
+    schemaVersion: 2,
     id: scenario.id,
     name: sanitizeSensitiveURL(scenario.name),
-    savedAtUnixMs: scenario.savedAtUnixMs,
+    tags: scenario.tags.slice(),
+    createdAtUnixMs: scenario.createdAtUnixMs,
+    updatedAtUnixMs: scenario.updatedAtUnixMs,
     ...(environmentProfileId ? { environmentProfileId } : {}),
     nodes: scenario.nodes.map(stripRuntimeNode),
     edges: scenario.edges.map(stripRuntimeEdge),
@@ -978,7 +963,7 @@ function collectRuntimeSecretValues(
   return Array.from(values).sort((left, right) => right.length - left.length);
 }
 
-function stripRuntimeEdge(edge: Edge): Edge {
+export function stripRuntimeEdge(edge: Edge): Edge {
   return {
     id: edge.id,
     source: edge.source,
@@ -988,24 +973,17 @@ function stripRuntimeEdge(edge: Edge): Edge {
   };
 }
 
-function isSavedScenario(value: unknown): value is SavedScenario {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as SavedScenario;
-  return typeof candidate.id === "string" &&
-    typeof candidate.name === "string" &&
-    typeof candidate.savedAtUnixMs === "number" &&
-    (candidate.environmentProfileId === undefined || typeof candidate.environmentProfileId === "string") &&
-    Array.isArray(candidate.nodes) &&
-    Array.isArray(candidate.edges);
-}
-
 function isHeaderRow(value: unknown): value is HeaderRow {
   return Boolean(value) &&
     typeof value === "object" &&
     typeof (value as HeaderRow).name === "string" &&
     typeof (value as HeaderRow).value === "string";
+}
+
+function newScenarioID(now: number) {
+  return typeof globalThis.crypto?.randomUUID === "function"
+    ? `scenario-${globalThis.crypto.randomUUID()}`
+    : `scenario-${now}`;
 }
 
 function isLocalHost(host: string) {

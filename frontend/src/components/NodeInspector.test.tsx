@@ -25,8 +25,6 @@ describe("NodeInspector load profile", () => {
         selectedNode={node}
         updateNode={vi.fn()}
         onOpenHelp={vi.fn()}
-        savedScenarios={[]}
-        onLoadScenario={vi.fn()}
         authSecret={{}}
         updateAuthSecret={vi.fn()}
       />,
@@ -56,8 +54,6 @@ describe("NodeInspector assertions", () => {
         selectedNode={node}
         updateNode={vi.fn()}
         onOpenHelp={vi.fn()}
-        savedScenarios={[]}
-        onLoadScenario={vi.fn()}
         authSecret={{}}
         updateAuthSecret={vi.fn()}
       />,

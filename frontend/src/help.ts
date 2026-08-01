@@ -6,6 +6,8 @@ export type HelpItem = { title: string; description: Record<HelpLanguage, string
 
 export const overviewHelpItems: HelpItem[] = [
   helpItem("Environment", "Select a named base URL and non-secret variables. SECRET_* bindings are masked and stay in memory only.", "이름이 있는 base URL과 일반 변수를 선택합니다. SECRET_* binding은 가려서 표시되며 메모리에만 보관됩니다."),
+  helpItem("Scenario library", "Name and tag scenarios, save library versions, recover the autosaved draft, or import and export versioned JSON files.", "Scenario에 이름과 tag를 지정하고 library version을 저장하거나, autosave draft를 복구하고 versioned JSON 파일을 import/export합니다."),
+  helpItem("Undo and redo", "Node/edge deletion, imports, new drafts, and graph replacement keep a bounded in-memory undo history.", "Node/edge 삭제, import, 새 draft, graph 교체는 제한된 메모리 undo history에 기록됩니다."),
   helpItem("Request", "Target URL, method, headers, and body for HTTP traffic.", "부하 테스트에서 보낼 HTTP 요청의 URL, method, headers, body입니다."),
   helpItem("Engine", "Staged VU or arrival-rate profiles, timeout, connection cap, and request RPS cap.", "단계형 VU 또는 arrival-rate profile, timeout, max conns, request RPS limit을 제어합니다."),
   helpItem("Assert", "Checks response status, headers, typed JSON values, or response and step latency.", "응답 status, header, typed JSON 값, response/step latency를 확인합니다."),
