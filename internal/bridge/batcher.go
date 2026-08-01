@@ -37,6 +37,7 @@ type MetricsBatch struct {
 	ConnRefused                    uint64                   `json:"connRefused"`
 	OtherErrors                    uint64                   `json:"otherErrors"`
 	AssertionsFailed               uint64                   `json:"assertionsFailed"`
+	AssertionFailuresByType        AssertionFailureCounts   `json:"assertionFailuresByType"`
 	CaptureFailures                uint64                   `json:"captureFailures"`
 	TemplateFailures               uint64                   `json:"templateFailures"`
 	DroppedIterations              uint64                   `json:"droppedIterations"`
@@ -73,21 +74,22 @@ type StatusCodeCount struct {
 }
 
 type RequestStepMetrics struct {
-	ID               string                   `json:"id"`
-	Name             string                   `json:"name"`
-	Total            uint64                   `json:"total"`
-	Success          uint64                   `json:"success"`
-	Failed           uint64                   `json:"failed"`
-	Timeout          uint64                   `json:"timeout"`
-	DNS              uint64                   `json:"dns"`
-	TLS              uint64                   `json:"tls"`
-	ConnRefused      uint64                   `json:"connRefused"`
-	OtherErrors      uint64                   `json:"otherErrors"`
-	AssertionsFailed uint64                   `json:"assertionsFailed"`
-	CaptureFailures  uint64                   `json:"captureFailures"`
-	TemplateFailures uint64                   `json:"templateFailures"`
-	RunLatency       CumulativeLatencyMetrics `json:"runLatency"`
-	StatusCodes      []StatusCodeCount        `json:"statusCodes"`
+	ID                      string                   `json:"id"`
+	Name                    string                   `json:"name"`
+	Total                   uint64                   `json:"total"`
+	Success                 uint64                   `json:"success"`
+	Failed                  uint64                   `json:"failed"`
+	Timeout                 uint64                   `json:"timeout"`
+	DNS                     uint64                   `json:"dns"`
+	TLS                     uint64                   `json:"tls"`
+	ConnRefused             uint64                   `json:"connRefused"`
+	OtherErrors             uint64                   `json:"otherErrors"`
+	AssertionsFailed        uint64                   `json:"assertionsFailed"`
+	AssertionFailuresByType AssertionFailureCounts   `json:"assertionFailuresByType"`
+	CaptureFailures         uint64                   `json:"captureFailures"`
+	TemplateFailures        uint64                   `json:"templateFailures"`
+	RunLatency              CumulativeLatencyMetrics `json:"runLatency"`
+	StatusCodes             []StatusCodeCount        `json:"statusCodes"`
 }
 
 type Batcher struct {
@@ -228,6 +230,7 @@ func buildMetricsBatchWithSteps(
 		ConnRefused:                    current.ConnRefused,
 		OtherErrors:                    current.OtherFailures,
 		AssertionsFailed:               current.AssertionFailures,
+		AssertionFailuresByType:        assertionFailureCounts(current.AssertionFailuresByType),
 		CaptureFailures:                current.CaptureFailures,
 		TemplateFailures:               current.TemplateFailures,
 		DroppedIterations:              current.DroppedIterations,
@@ -256,19 +259,20 @@ func buildRequestStepMetrics(snapshots []engine.RequestStepSnapshot) []RequestSt
 			statusCodes[statusIndex] = StatusCodeCount{Code: status.Code, Count: status.Count}
 		}
 		metrics[index] = RequestStepMetrics{
-			ID:               snapshot.ID,
-			Name:             snapshot.Name,
-			Total:            snapshot.TotalRequests,
-			Success:          snapshot.SuccessRequests,
-			Failed:           snapshot.FailedRequests,
-			Timeout:          snapshot.TimeoutFailures,
-			DNS:              snapshot.DNSFailures,
-			TLS:              snapshot.TLSFailures,
-			ConnRefused:      snapshot.ConnRefused,
-			OtherErrors:      snapshot.OtherFailures,
-			AssertionsFailed: snapshot.AssertionFailures,
-			CaptureFailures:  snapshot.CaptureFailures,
-			TemplateFailures: snapshot.TemplateFailures,
+			ID:                      snapshot.ID,
+			Name:                    snapshot.Name,
+			Total:                   snapshot.TotalRequests,
+			Success:                 snapshot.SuccessRequests,
+			Failed:                  snapshot.FailedRequests,
+			Timeout:                 snapshot.TimeoutFailures,
+			DNS:                     snapshot.DNSFailures,
+			TLS:                     snapshot.TLSFailures,
+			ConnRefused:             snapshot.ConnRefused,
+			OtherErrors:             snapshot.OtherFailures,
+			AssertionsFailed:        snapshot.AssertionFailures,
+			AssertionFailuresByType: assertionFailureCounts(snapshot.AssertionFailuresByType),
+			CaptureFailures:         snapshot.CaptureFailures,
+			TemplateFailures:        snapshot.TemplateFailures,
 			RunLatency: CumulativeLatencyMetrics{
 				Samples: snapshot.LatencySamples,
 				AvgMs:   averageLatencyMs(snapshot.TotalLatencyNano, snapshot.LatencySamples),

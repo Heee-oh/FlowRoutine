@@ -39,3 +39,33 @@ describe("NodeInspector load profile", () => {
     expect(markup).toContain("5-20 VUs");
   });
 });
+
+describe("NodeInspector assertions", () => {
+  it("renders typed JSON assertion and failure behavior controls", () => {
+    const node = createFlowNode("assertion", 2, {
+      assertionType: "json",
+      assertionOperator: "equals",
+      assertionJSONPath: "$.data.id",
+      assertionExpected: "42",
+      assertionValueType: "number",
+      assertionFailureMode: "stop",
+    });
+
+    const markup = renderToStaticMarkup(
+      <NodeInspector
+        selectedNode={node}
+        updateNode={vi.fn()}
+        onOpenHelp={vi.fn()}
+        savedScenarios={[]}
+        onLoadScenario={vi.fn()}
+        authSecret={{}}
+        updateAuthSecret={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("JSON body");
+    expect(markup).toContain("$.data.id");
+    expect(markup).toContain("Number");
+    expect(markup).toContain("Count and stop iteration");
+  });
+});

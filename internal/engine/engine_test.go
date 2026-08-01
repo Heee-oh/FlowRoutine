@@ -237,6 +237,181 @@ func TestEngineRunsScenarioStepsAndRecordsAssertionFailures(t *testing.T) {
 	}
 }
 
+func TestEngineClassifiesRichAssertionsAndCountOnlyFailures(t *testing.T) {
+	ln := fasthttputil.NewInmemoryListener()
+	defer ln.Close()
+
+	server := &fasthttp.Server{
+		Handler: func(ctx *fasthttp.RequestCtx) {
+			ctx.Response.Header.Set("Content-Type", "application/json")
+			ctx.Response.Header.Set("X-Trace", "present")
+			ctx.SetStatusCode(fasthttp.StatusOK)
+			ctx.Response.SetBodyRaw([]byte(`{"id":42,"active":true}`))
+		},
+	}
+	go func() { _ = server.Serve(ln) }()
+	defer server.Shutdown()
+
+	loadEngine, err := New(Config{
+		URL:             "http://unused",
+		VirtualUsers:    1,
+		Duration:        30 * time.Millisecond,
+		RequestTimeout:  time.Second,
+		MaxConnsPerHost: DefaultMaxConnsPerHost,
+		RateLimitRPS:    100,
+		ScenarioSteps: []ScenarioStep{
+			{ID: "request", Kind: StepRequest, URL: "http://unused"},
+			{Kind: StepAssert, Assertion: Assertion{Type: AssertionStatus, Expected: "201"}},
+			{Kind: StepAssert, Assertion: Assertion{Type: AssertionHeader, HeaderName: "x-trace", Operator: AssertionExists}},
+			{
+				Kind: StepAssert,
+				Assertion: Assertion{
+					Type:        AssertionHeader,
+					HeaderName:  "Content-Type",
+					Operator:    AssertionEquals,
+					Expected:    "text/plain",
+					FailureMode: AssertionCountOnly,
+				},
+			},
+			{
+				Kind: StepAssert,
+				Assertion: Assertion{
+					Type:      AssertionJSON,
+					JSONPath:  "$.id",
+					Operator:  AssertionEquals,
+					ValueType: AssertionValueNumber,
+					Expected:  "42",
+				},
+			},
+			{
+				Kind: StepAssert,
+				Assertion: Assertion{
+					Type:      AssertionJSON,
+					JSONPath:  "$.active",
+					Operator:  AssertionEquals,
+					ValueType: AssertionValueBoolean,
+					Expected:  "false",
+				},
+			},
+			{Kind: StepAssert, Assertion: Assertion{Type: AssertionResponseLatency, MaxLatency: time.Nanosecond}},
+			{Kind: StepAssert, Assertion: Assertion{Type: AssertionStepLatency, MaxLatency: time.Hour}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadEngine.client.Dial = func(addr string) (net.Conn, error) { return ln.Dial() }
+	if err := loadEngine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-loadEngine.Done()
+
+	snapshot := loadEngine.Snapshot()
+	requests := snapshot.TotalRequests
+	if requests == 0 {
+		t.Fatal("expected assertion requests")
+	}
+	wantEnforced := requests * 3
+	if snapshot.AssertionFailures != wantEnforced {
+		t.Fatalf("unexpected enforced assertion failures: got %d want %d", snapshot.AssertionFailures, wantEnforced)
+	}
+	breakdown := snapshot.AssertionFailuresByType
+	if breakdown.Status != requests || breakdown.Header != requests || breakdown.JSON != requests ||
+		breakdown.ResponseLatency != requests || breakdown.StepLatency != 0 || breakdown.CountOnly != requests {
+		t.Fatalf("unexpected assertion breakdown: %+v for %d requests", breakdown, requests)
+	}
+	steps := loadEngine.RequestStepSnapshots()
+	if len(steps) != 1 || steps[0].AssertionFailuresByType != breakdown {
+		t.Fatalf("request-step assertion breakdown does not match aggregate: steps=%+v aggregate=%+v", steps, breakdown)
+	}
+}
+
+func TestEngineStopsOnlyCurrentIterationAfterAssertionFailure(t *testing.T) {
+	ln := fasthttputil.NewInmemoryListener()
+	defer ln.Close()
+
+	server := &fasthttp.Server{Handler: func(ctx *fasthttp.RequestCtx) {
+		ctx.SetStatusCode(fasthttp.StatusOK)
+	}}
+	go func() { _ = server.Serve(ln) }()
+	defer server.Shutdown()
+
+	loadEngine, err := New(Config{
+		URL:             "http://unused/first",
+		VirtualUsers:    1,
+		Duration:        30 * time.Millisecond,
+		RequestTimeout:  time.Second,
+		MaxConnsPerHost: DefaultMaxConnsPerHost,
+		RateLimitRPS:    100,
+		ScenarioSteps: []ScenarioStep{
+			{ID: "first", Kind: StepRequest, URL: "http://unused/first"},
+			{
+				Kind: StepAssert,
+				Assertion: Assertion{
+					Type:        AssertionStatus,
+					Expected:    "500",
+					FailureMode: AssertionStop,
+				},
+			},
+			{ID: "second", Kind: StepRequest, URL: "http://unused/second"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadEngine.client.Dial = func(addr string) (net.Conn, error) { return ln.Dial() }
+	if err := loadEngine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-loadEngine.Done()
+
+	steps := loadEngine.RequestStepSnapshots()
+	if len(steps) != 2 || steps[0].TotalRequests == 0 || steps[1].TotalRequests != 0 {
+		t.Fatalf("stop mode should skip the remaining iteration only: %+v", steps)
+	}
+	if loadEngine.Snapshot().AssertionFailures == 0 {
+		t.Fatal("expected the stop assertion failure to be counted")
+	}
+}
+
+func TestValidateConfigRejectsInvalidAssertionsBeforeRun(t *testing.T) {
+	base := Config{
+		URL: "http://example.com",
+		ScenarioSteps: []ScenarioStep{
+			{Kind: StepRequest, URL: "http://example.com"},
+		},
+	}
+	tests := []struct {
+		name      string
+		assertion Assertion
+	}{
+		{name: "invalid status", assertion: Assertion{Type: AssertionStatus, Expected: "999"}},
+		{name: "missing header", assertion: Assertion{Type: AssertionHeader, Operator: AssertionExists}},
+		{name: "invalid JSON path", assertion: Assertion{Type: AssertionJSON, JSONPath: "$.items[bad]", Operator: AssertionExists}},
+		{name: "invalid typed value", assertion: Assertion{Type: AssertionJSON, JSONPath: "$.active", Operator: AssertionEquals, ValueType: AssertionValueBoolean, Expected: "yes"}},
+		{name: "missing latency", assertion: Assertion{Type: AssertionStepLatency}},
+		{name: "invalid failure mode", assertion: Assertion{Type: AssertionStatus, Expected: "2xx", FailureMode: "abort"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := base
+			config.ScenarioSteps = append([]ScenarioStep(nil), base.ScenarioSteps...)
+			config.ScenarioSteps = append(config.ScenarioSteps, ScenarioStep{Kind: StepAssert, Assertion: test.assertion})
+			if err := ValidateConfig(config); err == nil {
+				t.Fatal("expected assertion validation error")
+			}
+		})
+	}
+
+	base.ScenarioSteps = []ScenarioStep{{
+		Kind:      StepAssert,
+		Assertion: Assertion{Type: AssertionStatus, Expected: "2xx"},
+	}}
+	if err := ValidateConfig(base); err == nil {
+		t.Fatal("expected assertion-before-request validation error")
+	}
+}
+
 func TestEngineCapturesJSONVariablesForLaterSteps(t *testing.T) {
 	ln := fasthttputil.NewInmemoryListener()
 	defer ln.Close()

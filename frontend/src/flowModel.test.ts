@@ -237,6 +237,40 @@ describe("scenario graph compilation", () => {
     expect(request.config.rateLimitRps).toBe(0);
     expect(request.config.rampUpMs).toBe(0);
   });
+
+  it("compiles rich assertion settings into an executable scenario step", () => {
+    const requestNode = createFlowNode("request", 20, { url: "https://example.com/items" });
+    const assertionNode = createFlowNode("assertion", 21, {
+      assertionType: "json",
+      assertionOperator: "equals",
+      assertionJSONPath: "$.data.id",
+      assertionExpected: "42",
+      assertionValueType: "number",
+      assertionFailureMode: "stop",
+    });
+    const engineNode = createFlowNode("engine", 22, null);
+    const nodes = [requestNode, assertionNode, engineNode];
+    const edges = [
+      { id: "request-assertion", source: requestNode.id, target: assertionNode.id },
+      { id: "assertion-engine", source: assertionNode.id, target: engineNode.id },
+    ];
+
+    const request = buildStartRequestFromGraph(nodes, edges, createRequest(), {});
+
+    expect(request.config.scenarioSteps[1]).toEqual({
+      id: assertionNode.id,
+      name: "Assert JSON",
+      kind: "assert",
+      assertion: {
+        type: "json",
+        operator: "equals",
+        jsonPath: "$.data.id",
+        expected: "42",
+        valueType: "number",
+        failureMode: "stop",
+      },
+    });
+  });
 });
 
 describe("parseCaptureText", () => {

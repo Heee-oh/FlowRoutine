@@ -474,6 +474,20 @@ func normalizeScenarioSteps(steps []ScenarioStep, defaultMethod string) ([]Scena
 			if len(next.ExpectedStatus) > MaxMethodBytes {
 				return nil, fmt.Errorf("%s expected status must be at most %d bytes", scope, MaxMethodBytes)
 			}
+		case engine.StepAssert:
+			next.Assertion = normalizeAssertion(step.Assertion)
+			if len(next.Assertion.HeaderName) > engine.MaxAssertionSubjectBytes {
+				return nil, fmt.Errorf("%s assertion header name must be at most %d bytes", scope, engine.MaxAssertionSubjectBytes)
+			}
+			if len(next.Assertion.JSONPath) > engine.MaxAssertionSubjectBytes {
+				return nil, fmt.Errorf("%s assertion JSON path must be at most %d bytes", scope, engine.MaxAssertionSubjectBytes)
+			}
+			if len(next.Assertion.Expected) > engine.MaxAssertionValueBytes {
+				return nil, fmt.Errorf("%s assertion expected value must be at most %d bytes", scope, engine.MaxAssertionValueBytes)
+			}
+			if next.Assertion.MaxLatencyMS < 0 || next.Assertion.MaxLatencyMS > MaxDuration.Milliseconds() {
+				return nil, fmt.Errorf("%s assertion maximum latency must be between 0 and %s", scope, MaxDuration)
+			}
 		default:
 			return nil, fmt.Errorf("%s has unsupported kind %q", scope, next.Kind)
 		}
@@ -483,6 +497,16 @@ func normalizeScenarioSteps(steps []ScenarioStep, defaultMethod string) ([]Scena
 		return nil, errors.New("scenario requires at least one request step")
 	}
 	return normalized, nil
+}
+
+func normalizeAssertion(assertion Assertion) Assertion {
+	assertion.Type = strings.TrimSpace(assertion.Type)
+	assertion.Operator = strings.TrimSpace(assertion.Operator)
+	assertion.HeaderName = strings.TrimSpace(assertion.HeaderName)
+	assertion.JSONPath = strings.TrimSpace(assertion.JSONPath)
+	assertion.ValueType = strings.TrimSpace(assertion.ValueType)
+	assertion.FailureMode = strings.TrimSpace(assertion.FailureMode)
+	return assertion
 }
 
 func normalizeHeaders(scope string, headers []Header) ([]Header, int, error) {
@@ -556,6 +580,9 @@ func normalizeCaptures(scope string, captures []Capture) ([]Capture, error) {
 
 func scenarioStepBytes(step ScenarioStep) int {
 	total := len(step.ID) + len(step.Name) + len(step.Kind) + len(step.URL) + len(step.Method) + len(step.Body) + len(step.ExpectedStatus)
+	total += len(step.Assertion.Type) + len(step.Assertion.Operator) + len(step.Assertion.HeaderName) +
+		len(step.Assertion.JSONPath) + len(step.Assertion.Expected) + len(step.Assertion.ValueType) +
+		len(step.Assertion.FailureMode)
 	for _, header := range step.Headers {
 		total += len(header.Name) + len(header.Value) + 4
 	}
@@ -652,6 +679,9 @@ func estimateResources(config LoadConfig) (PreflightEstimate, error) {
 		requestSteps = 0
 		for _, step := range config.ScenarioSteps {
 			sharedBytes += len(step.ID) + len(step.Name) + len(step.Kind) + len(step.URL) + len(step.Method) + len(step.Body) + len(step.ExpectedStatus)
+			sharedBytes += len(step.Assertion.Type) + len(step.Assertion.Operator) + len(step.Assertion.HeaderName) +
+				len(step.Assertion.JSONPath) + len(step.Assertion.Expected) + len(step.Assertion.ValueType) +
+				len(step.Assertion.FailureMode)
 			for _, capture := range step.Captures {
 				sharedBytes += len(capture.Name) + len(capture.Path) + len(capture.Scope) + len(capture.OnStatus)
 			}

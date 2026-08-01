@@ -77,6 +77,14 @@ func TestBuildMetricsBatchUsesSnapshotDelta(t *testing.T) {
 			TLSFailures:       1,
 			ConnRefused:       1,
 			AssertionFailures: 7,
+			AssertionFailuresByType: engine.AssertionFailureCounts{
+				Status:          1,
+				Header:          2,
+				JSON:            3,
+				ResponseLatency: 4,
+				StepLatency:     5,
+				CountOnly:       2,
+			},
 			CaptureFailures:   2,
 			TemplateFailures:  3,
 			DroppedIterations: 9,
@@ -109,6 +117,11 @@ func TestBuildMetricsBatchUsesSnapshotDelta(t *testing.T) {
 	}
 	if batch.AssertionsFailed != 7 || batch.CaptureFailures != 2 || batch.TemplateFailures != 3 {
 		t.Fatalf("unexpected assertion breakdown: %+v", batch)
+	}
+	if batch.AssertionFailuresByType != (AssertionFailureCounts{
+		Status: 1, Header: 2, JSON: 3, ResponseLatency: 4, StepLatency: 5, CountOnly: 2,
+	}) {
+		t.Fatalf("unexpected typed assertion breakdown: %+v", batch.AssertionFailuresByType)
 	}
 	if batch.DroppedIterations != 9 {
 		t.Fatalf("unexpected dropped iterations: %+v", batch)
@@ -176,13 +189,17 @@ func TestBuildMetricsBatchIncludesCompactRequestStepDiagnostics(t *testing.T) {
 			FailedRequests:    2,
 			TimeoutFailures:   1,
 			AssertionFailures: 1,
-			LatencySamples:    7,
-			TotalLatencyNano:  uint64(70 * time.Millisecond),
-			MinLatencyNano:    uint64(time.Millisecond),
-			MaxLatencyNano:    uint64(20 * time.Millisecond),
-			P95LatencyNano:    uint64(19 * time.Millisecond),
-			P99LatencyNano:    uint64(20 * time.Millisecond),
-			P999LatencyNano:   uint64(20 * time.Millisecond),
+			AssertionFailuresByType: engine.AssertionFailureCounts{
+				Header:    2,
+				CountOnly: 1,
+			},
+			LatencySamples:   7,
+			TotalLatencyNano: uint64(70 * time.Millisecond),
+			MinLatencyNano:   uint64(time.Millisecond),
+			MaxLatencyNano:   uint64(20 * time.Millisecond),
+			P95LatencyNano:   uint64(19 * time.Millisecond),
+			P99LatencyNano:   uint64(20 * time.Millisecond),
+			P999LatencyNano:  uint64(20 * time.Millisecond),
 			StatusCodes: []engine.StepStatusCodeCount{
 				{Code: 200, Count: 5},
 				{Code: 500, Count: 2},
@@ -199,6 +216,9 @@ func TestBuildMetricsBatchIncludesCompactRequestStepDiagnostics(t *testing.T) {
 	}
 	if step.RunLatency.AvgMs != 10 || step.RunLatency.P99Ms != 20 {
 		t.Fatalf("unexpected request-step latency: %+v", step.RunLatency)
+	}
+	if step.AssertionFailuresByType.Header != 2 || step.AssertionFailuresByType.CountOnly != 1 {
+		t.Fatalf("unexpected request-step assertion types: %+v", step.AssertionFailuresByType)
 	}
 	if len(step.StatusCodes) != 2 || step.StatusCodes[1] != (StatusCodeCount{Code: 500, Count: 2}) {
 		t.Fatalf("unexpected request-step status codes: %+v", step.StatusCodes)

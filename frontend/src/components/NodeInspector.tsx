@@ -288,9 +288,59 @@ const NodeFields = memo(function NodeFields({
       );
     case "assertion":
       return (
-        <Field label="Expected status">
-          <input value={node.data.expectedStatus ?? "2xx"} onChange={(event) => updateNode({ expectedStatus: event.target.value })} />
-        </Field>
+        <>
+          <Field label="Assertion type">
+            <select
+              value={node.data.assertionType ?? "status"}
+              onChange={(event) => updateNode({ assertionType: event.target.value as FlowNodeData["assertionType"] })}
+            >
+              <option value="status">Status</option>
+              <option value="header">Header</option>
+              <option value="json">JSON body</option>
+              <option value="responseLatency">Response latency</option>
+              <option value="stepLatency">Step latency</option>
+            </select>
+          </Field>
+          {(node.data.assertionType ?? "status") === "status" ? (
+            <Field label="Expected status">
+              <input value={node.data.expectedStatus ?? "2xx"} onChange={(event) => updateNode({ expectedStatus: event.target.value })} />
+            </Field>
+          ) : null}
+          {(node.data.assertionType ?? "status") === "header" ? (
+            <>
+              <Field label="Header name">
+                <input value={node.data.assertionHeaderName ?? "Content-Type"} onChange={(event) => updateNode({ assertionHeaderName: event.target.value })} />
+              </Field>
+              <AssertionOperatorFields node={node} updateNode={updateNode} label="Header value" />
+            </>
+          ) : null}
+          {(node.data.assertionType ?? "status") === "json" ? (
+            <>
+              <Field label="JSON path">
+                <input value={node.data.assertionJSONPath ?? "$.data.id"} onChange={(event) => updateNode({ assertionJSONPath: event.target.value })} />
+              </Field>
+              <AssertionOperatorFields node={node} updateNode={updateNode} label="Expected value" json />
+            </>
+          ) : null}
+          {(node.data.assertionType === "responseLatency" || node.data.assertionType === "stepLatency") ? (
+            <Field label="Maximum latency ms">
+              <NumberInput value={node.data.assertionMaxLatencyMs ?? 500} min={1} max={3_600_000} onChange={(value) => updateNode({ assertionMaxLatencyMs: value })} />
+            </Field>
+          ) : null}
+          <Field label="On failure">
+            <select
+              value={node.data.assertionFailureMode ?? "continue"}
+              onChange={(event) => updateNode({ assertionFailureMode: event.target.value as FlowNodeData["assertionFailureMode"] })}
+            >
+              <option value="continue">Count and continue</option>
+              <option value="stop">Count and stop iteration</option>
+              <option value="countOnly">Count only</option>
+            </select>
+          </Field>
+          <div className="inspector-note">
+            Response latency measures HTTP time; step latency also includes pacing, templates, and captures.
+          </div>
+        </>
       );
     case "delay":
       return (
@@ -353,6 +403,46 @@ const NodeFields = memo(function NodeFields({
         </>
       );
   }
+});
+
+const AssertionOperatorFields = memo(function AssertionOperatorFields({
+  node,
+  updateNode,
+  label,
+  json = false,
+}: {
+  node: Node<FlowNodeData>;
+  updateNode: (patch: Partial<FlowNodeData>) => void;
+  label: string;
+  json?: boolean;
+}) {
+  const operator = node.data.assertionOperator ?? (json ? "equals" : "exists");
+  const valueType = node.data.assertionValueType ?? "string";
+  return (
+    <>
+      <Field label="Operator">
+        <select value={operator} onChange={(event) => updateNode({ assertionOperator: event.target.value as FlowNodeData["assertionOperator"] })}>
+          <option value="exists">Exists</option>
+          <option value="equals">Equals</option>
+        </select>
+      </Field>
+      {operator === "equals" && json ? (
+        <Field label="Value type">
+          <select value={valueType} onChange={(event) => updateNode({ assertionValueType: event.target.value as FlowNodeData["assertionValueType"] })}>
+            <option value="string">String</option>
+            <option value="number">Number</option>
+            <option value="boolean">Boolean</option>
+            <option value="null">Null</option>
+          </select>
+        </Field>
+      ) : null}
+      {operator === "equals" && (!json || valueType !== "null") ? (
+        <Field label={label}>
+          <input value={node.data.assertionExpected ?? ""} onChange={(event) => updateNode({ assertionExpected: event.target.value })} />
+        </Field>
+      ) : null}
+    </>
+  );
 });
 
 const LoadProfileFields = memo(function LoadProfileFields({

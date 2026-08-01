@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -174,20 +175,30 @@ func (e *Engine) RequestStepSnapshots() []RequestStepSnapshot {
 }
 
 type workerRuntime struct {
-	index           int
-	stats           *statsShard
-	sampleCountdown int
-	variables       *workerVariables
+	index            int
+	stats            *statsShard
+	sampleCountdown  int
+	variables        *workerVariables
+	assertionResults []bool
 }
 
 func (e *Engine) newWorkerRuntime(index int) workerRuntime {
 	return workerRuntime{
-		index:           index,
-		stats:           e.stats.Shard(index),
-		sampleCountdown: e.cfg.latencySampleRate,
-		variables:       newWorkerVariables(),
+		index:            index,
+		stats:            e.stats.Shard(index),
+		sampleCountdown:  e.cfg.latencySampleRate,
+		variables:        newWorkerVariables(),
+		assertionResults: make([]bool, e.cfg.assertionCount),
 	}
 }
+
+type stepOutcome uint8
+
+const (
+	stepContinue stepOutcome = iota
+	stepStopIteration
+	stepCanceled
+)
 
 func (e *Engine) runIteration(ctx context.Context, runtime *workerRuntime) bool {
 	runtime.variables.beginIteration()
@@ -195,17 +206,19 @@ func (e *Engine) runIteration(ctx context.Context, runtime *workerRuntime) bool 
 	var lastStatus int
 	lastRequestMetricsIndex := -1
 	for i := range e.cfg.steps {
-		if !e.runStep(
+		outcome := e.runStep(
 			ctx,
-			runtime.stats,
-			runtime.index,
+			runtime,
 			sampleLatency,
 			&lastStatus,
 			&lastRequestMetricsIndex,
 			&e.cfg.steps[i],
-			runtime.variables,
-		) {
+		)
+		if outcome == stepCanceled {
 			return false
+		}
+		if outcome == stepStopIteration {
+			return true
 		}
 	}
 	return true
@@ -236,104 +249,208 @@ func newHostClient(cfg compiledConfig, client compiledClient) *fasthttp.HostClie
 
 func (e *Engine) runStep(
 	ctx context.Context,
-	stats *statsShard,
-	workerIndex int,
+	runtime *workerRuntime,
 	sampleLatency bool,
 	lastStatus *int,
 	lastRequestMetricsIndex *int,
 	step *compiledStep,
-	variables *workerVariables,
-) bool {
+) stepOutcome {
 	switch step.kind {
 	case compiledDelay:
-		return sleepContext(ctx, step.delay)
-	case compiledAssertStatus:
-		if !matchStatus(*lastStatus, step.expectedStatus) {
-			stats.RecordAssertionFailure()
-			if stepStats := e.stats.requestStepShard(*lastRequestMetricsIndex, workerIndex); stepStats != nil {
-				stepStats.RecordAssertionFailure()
-			}
+		if !sleepContext(ctx, step.delay) {
+			return stepCanceled
 		}
-		return true
+		return stepContinue
+	case compiledAssert:
+		if runtime.assertionResults[step.assertion.resultIndex] {
+			return stepContinue
+		}
+		countOnly := step.assertion.failureMode == AssertionCountOnly
+		runtime.stats.RecordScenarioAssertionFailure(step.assertion.typeName, countOnly)
+		if stepStats := e.stats.requestStepShard(*lastRequestMetricsIndex, runtime.index); stepStats != nil {
+			stepStats.RecordScenarioAssertionFailure(step.assertion.typeName, countOnly)
+		}
+		if step.assertion.failureMode == AssertionStop {
+			return stepStopIteration
+		}
+		return stepContinue
 	case compiledRequest:
 		*lastRequestMetricsIndex = step.request.metricsIndex
-		return e.runRequestStep(ctx, stats, workerIndex, sampleLatency, lastStatus, step.request, variables)
+		return e.runRequestStep(ctx, runtime, sampleLatency, lastStatus, step.request)
 	default:
-		return true
+		return stepContinue
 	}
 }
 
 func (e *Engine) runRequestStep(
 	ctx context.Context,
-	stats *statsShard,
-	workerIndex int,
+	runtime *workerRuntime,
 	sampleLatency bool,
 	lastStatus *int,
 	step compiledRequestStep,
-	variables *workerVariables,
-) bool {
-	if e.limiter != nil && !e.limiter.Wait(ctx) {
-		return false
+) stepOutcome {
+	stepStartedAt := time.Time{}
+	if hasAssertionType(step.assertions, AssertionStepLatency) {
+		stepStartedAt = time.Now()
 	}
-	stepStats := e.stats.requestStepShard(step.metricsIndex, workerIndex)
+	if e.limiter != nil && !e.limiter.Wait(ctx) {
+		return stepCanceled
+	}
+	stepStats := e.stats.requestStepShard(step.metricsIndex, runtime.index)
 
-	req, err := e.acquireRequest(step, variables)
+	req, err := e.acquireRequest(step, runtime.variables)
 	if err != nil {
-		variables.releaseRenderBuffer()
+		runtime.variables.releaseRenderBuffer()
 		*lastStatus = 0
-		invalidateCaptures(step.captures, variables)
-		stats.RecordTemplateFailure()
+		invalidateCaptures(step.captures, runtime.variables)
+		runtime.stats.RecordTemplateFailure()
 		if stepStats != nil {
 			stepStats.RecordTemplateFailure()
 		}
-		return true
+		setFailedAssertionResults(step.assertions, runtime.assertionResults)
+		return stepContinue
 	}
 	resp := e.acquireResponse()
 	startedAt := time.Time{}
-	if sampleLatency {
+	measureResponseLatency := sampleLatency || hasAssertionType(step.assertions, AssertionResponseLatency)
+	if measureResponseLatency {
 		startedAt = time.Now()
 	}
 	err = e.clients[step.clientIndex].DoTimeout(req, resp, e.cfg.requestTimeout)
 	latency := time.Duration(0)
-	if sampleLatency {
+	if measureResponseLatency {
 		latency = time.Since(startedAt)
 	}
 
 	if err != nil {
 		*lastStatus = 0
-		invalidateCaptures(step.captures, variables)
+		invalidateCaptures(step.captures, runtime.variables)
 		failure := ClassifyFailure(err)
-		stats.RecordFailureSampled(latency, step.requestBytes, sampleLatency, failure)
+		runtime.stats.RecordFailureSampled(latency, step.requestBytes, sampleLatency, failure)
 		if stepStats != nil {
 			stepStats.RecordHTTPFailureSampled(latency, sampleLatency, failure, 0)
 		}
 	} else {
 		*lastStatus = resp.StatusCode()
 		if isSuccessStatus(*lastStatus) {
-			stats.RecordHTTPSuccessSampled(latency, len(resp.Body()), step.requestBytes, sampleLatency, *lastStatus)
+			runtime.stats.RecordHTTPSuccessSampled(latency, len(resp.Body()), step.requestBytes, sampleLatency, *lastStatus)
 			if stepStats != nil {
 				stepStats.RecordHTTPSuccessSampled(latency, sampleLatency, *lastStatus)
 			}
 		} else {
-			stats.RecordHTTPFailureSampled(latency, step.requestBytes, sampleLatency, FailureOther, *lastStatus)
+			runtime.stats.RecordHTTPFailureSampled(latency, step.requestBytes, sampleLatency, FailureOther, *lastStatus)
 			if stepStats != nil {
 				stepStats.RecordHTTPFailureSampled(latency, sampleLatency, FailureOther, *lastStatus)
 			}
 		}
 		if len(step.captures) > 0 {
-			if err := captureVariables(resp.Body(), *lastStatus, step.captures, variables); err != nil {
-				stats.RecordCaptureFailure()
+			if err := captureVariables(resp.Body(), *lastStatus, step.captures, runtime.variables); err != nil {
+				runtime.stats.RecordCaptureFailure()
 				if stepStats != nil {
 					stepStats.RecordCaptureFailure()
 				}
 			}
 		}
 	}
+	stepLatency := time.Duration(0)
+	if !stepStartedAt.IsZero() {
+		stepLatency = time.Since(stepStartedAt)
+	}
+	evaluateAssertions(step.assertions, resp, err == nil, latency, stepLatency, runtime.assertionResults)
 
 	e.releaseResponse(resp)
 	e.releaseRequest(req)
-	variables.releaseRenderBuffer()
-	return true
+	runtime.variables.releaseRenderBuffer()
+	return stepContinue
+}
+
+func hasAssertionType(assertions []compiledAssertion, typeName AssertionType) bool {
+	for index := range assertions {
+		if assertions[index].typeName == typeName {
+			return true
+		}
+	}
+	return false
+}
+
+func setFailedAssertionResults(assertions []compiledAssertion, results []bool) {
+	for index := range assertions {
+		results[assertions[index].resultIndex] = false
+	}
+}
+
+func evaluateAssertions(
+	assertions []compiledAssertion,
+	response *fasthttp.Response,
+	requestSucceeded bool,
+	responseLatency time.Duration,
+	stepLatency time.Duration,
+	results []bool,
+) {
+	var document any
+	jsonParsed := false
+	jsonValid := false
+	for index := range assertions {
+		assertion := &assertions[index]
+		passed := false
+		switch assertion.typeName {
+		case AssertionStatus:
+			passed = requestSucceeded && matchStatus(response.StatusCode(), assertion.expectedString)
+		case AssertionHeader:
+			if requestSucceeded {
+				value, exists := responseHeaderValue(&response.Header, assertion.headerName)
+				passed = exists && (assertion.operator == AssertionExists || bytes.Equal(value, []byte(assertion.expectedString)))
+			}
+		case AssertionJSON:
+			if requestSucceeded {
+				if !jsonParsed {
+					jsonParsed = true
+					jsonValid = json.Unmarshal(response.Body(), &document) == nil
+				}
+				if jsonValid {
+					value, err := jsonPathValue(document, assertion.jsonPath)
+					if err == nil {
+						passed = assertion.operator == AssertionExists || jsonAssertionValueMatches(value, assertion)
+					}
+				}
+			}
+		case AssertionResponseLatency:
+			passed = requestSucceeded && responseLatency <= assertion.maxLatency
+		case AssertionStepLatency:
+			passed = requestSucceeded && stepLatency <= assertion.maxLatency
+		}
+		results[assertion.resultIndex] = passed
+	}
+}
+
+func responseHeaderValue(header *fasthttp.ResponseHeader, name []byte) ([]byte, bool) {
+	var value []byte
+	found := false
+	header.VisitAll(func(key []byte, candidate []byte) {
+		if !found && bytes.EqualFold(key, name) {
+			value = candidate
+			found = true
+		}
+	})
+	return value, found
+}
+
+func jsonAssertionValueMatches(value any, assertion *compiledAssertion) bool {
+	switch assertion.valueType {
+	case AssertionValueString:
+		typed, ok := value.(string)
+		return ok && typed == assertion.expectedString
+	case AssertionValueNumber:
+		typed, ok := value.(float64)
+		return ok && typed == assertion.expectedNumber
+	case AssertionValueBoolean:
+		typed, ok := value.(bool)
+		return ok && typed == assertion.expectedBoolean
+	case AssertionValueNull:
+		return value == nil
+	default:
+		return false
+	}
 }
 
 func isSuccessStatus(status int) bool {

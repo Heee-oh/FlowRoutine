@@ -37,7 +37,19 @@ type ScenarioStep struct {
 	Body           string    `json:"body"`
 	DelayMS        int64     `json:"delayMs"`
 	ExpectedStatus string    `json:"expectedStatus"`
+	Assertion      Assertion `json:"assertion"`
 	Captures       []Capture `json:"captures"`
+}
+
+type Assertion struct {
+	Type         string `json:"type"`
+	Operator     string `json:"operator"`
+	HeaderName   string `json:"headerName"`
+	JSONPath     string `json:"jsonPath"`
+	Expected     string `json:"expected"`
+	ValueType    string `json:"valueType"`
+	MaxLatencyMS int64  `json:"maxLatencyMs"`
+	FailureMode  string `json:"failureMode"`
 }
 
 type Capture struct {
@@ -81,31 +93,41 @@ type LoadConfig struct {
 }
 
 type SnapshotResponse struct {
-	StartedAtUnixMs   int64                `json:"startedAtUnixMs"`
-	AtUnixMs          int64                `json:"atUnixMs"`
-	TotalRequests     uint64               `json:"totalRequests"`
-	SuccessRequests   uint64               `json:"successRequests"`
-	FailedRequests    uint64               `json:"failedRequests"`
-	TimeoutFailures   uint64               `json:"timeoutFailures"`
-	DNSFailures       uint64               `json:"dnsFailures"`
-	TLSFailures       uint64               `json:"tlsFailures"`
-	ConnRefused       uint64               `json:"connRefused"`
-	OtherFailures     uint64               `json:"otherFailures"`
-	AssertionFailures uint64               `json:"assertionFailures"`
-	CaptureFailures   uint64               `json:"captureFailures"`
-	TemplateFailures  uint64               `json:"templateFailures"`
-	DroppedIterations uint64               `json:"droppedIterations"`
-	LatencySamples    uint64               `json:"latencySamples"`
-	TotalLatencyNano  uint64               `json:"totalLatencyNano"`
-	MinLatencyNano    uint64               `json:"minLatencyNano"`
-	MaxLatencyNano    uint64               `json:"maxLatencyNano"`
-	P95LatencyNano    uint64               `json:"p95LatencyNano"`
-	P99LatencyNano    uint64               `json:"p99LatencyNano"`
-	P999LatencyNano   uint64               `json:"p999LatencyNano"`
-	BytesRead         uint64               `json:"bytesRead"`
-	BytesWritten      uint64               `json:"bytesWritten"`
-	StatusCodes       []StatusCodeCount    `json:"statusCodes"`
-	StepMetrics       []RequestStepMetrics `json:"stepMetrics"`
+	StartedAtUnixMs         int64                  `json:"startedAtUnixMs"`
+	AtUnixMs                int64                  `json:"atUnixMs"`
+	TotalRequests           uint64                 `json:"totalRequests"`
+	SuccessRequests         uint64                 `json:"successRequests"`
+	FailedRequests          uint64                 `json:"failedRequests"`
+	TimeoutFailures         uint64                 `json:"timeoutFailures"`
+	DNSFailures             uint64                 `json:"dnsFailures"`
+	TLSFailures             uint64                 `json:"tlsFailures"`
+	ConnRefused             uint64                 `json:"connRefused"`
+	OtherFailures           uint64                 `json:"otherFailures"`
+	AssertionFailures       uint64                 `json:"assertionFailures"`
+	AssertionFailuresByType AssertionFailureCounts `json:"assertionFailuresByType"`
+	CaptureFailures         uint64                 `json:"captureFailures"`
+	TemplateFailures        uint64                 `json:"templateFailures"`
+	DroppedIterations       uint64                 `json:"droppedIterations"`
+	LatencySamples          uint64                 `json:"latencySamples"`
+	TotalLatencyNano        uint64                 `json:"totalLatencyNano"`
+	MinLatencyNano          uint64                 `json:"minLatencyNano"`
+	MaxLatencyNano          uint64                 `json:"maxLatencyNano"`
+	P95LatencyNano          uint64                 `json:"p95LatencyNano"`
+	P99LatencyNano          uint64                 `json:"p99LatencyNano"`
+	P999LatencyNano         uint64                 `json:"p999LatencyNano"`
+	BytesRead               uint64                 `json:"bytesRead"`
+	BytesWritten            uint64                 `json:"bytesWritten"`
+	StatusCodes             []StatusCodeCount      `json:"statusCodes"`
+	StepMetrics             []RequestStepMetrics   `json:"stepMetrics"`
+}
+
+type AssertionFailureCounts struct {
+	Status          uint64 `json:"status"`
+	Header          uint64 `json:"header"`
+	JSON            uint64 `json:"json"`
+	ResponseLatency uint64 `json:"responseLatency"`
+	StepLatency     uint64 `json:"stepLatency"`
+	CountOnly       uint64 `json:"countOnly"`
 }
 
 type controllerState uint8
@@ -334,7 +356,17 @@ func (c LoadConfig) toEngineConfig() engine.Config {
 			Body:           []byte(step.Body),
 			Delay:          time.Duration(step.DelayMS) * time.Millisecond,
 			ExpectedStatus: step.ExpectedStatus,
-			Captures:       captures,
+			Assertion: engine.Assertion{
+				Type:        engine.AssertionType(step.Assertion.Type),
+				Operator:    engine.AssertionOperator(step.Assertion.Operator),
+				HeaderName:  step.Assertion.HeaderName,
+				JSONPath:    step.Assertion.JSONPath,
+				Expected:    step.Assertion.Expected,
+				ValueType:   engine.AssertionValueType(step.Assertion.ValueType),
+				MaxLatency:  time.Duration(step.Assertion.MaxLatencyMS) * time.Millisecond,
+				FailureMode: engine.AssertionFailureMode(step.Assertion.FailureMode),
+			},
+			Captures: captures,
 		})
 	}
 	var profile *engine.LoadProfile
@@ -378,30 +410,42 @@ func (c LoadConfig) toEngineConfig() engine.Config {
 
 func snapshotResponse(snapshot engine.Snapshot, steps []engine.RequestStepSnapshot) SnapshotResponse {
 	return SnapshotResponse{
-		StartedAtUnixMs:   snapshot.StartedAt.UnixMilli(),
-		AtUnixMs:          snapshot.At.UnixMilli(),
-		TotalRequests:     snapshot.TotalRequests,
-		SuccessRequests:   snapshot.SuccessRequests,
-		FailedRequests:    snapshot.FailedRequests,
-		TimeoutFailures:   snapshot.TimeoutFailures,
-		DNSFailures:       snapshot.DNSFailures,
-		TLSFailures:       snapshot.TLSFailures,
-		ConnRefused:       snapshot.ConnRefused,
-		OtherFailures:     snapshot.OtherFailures,
-		AssertionFailures: snapshot.AssertionFailures,
-		CaptureFailures:   snapshot.CaptureFailures,
-		TemplateFailures:  snapshot.TemplateFailures,
-		DroppedIterations: snapshot.DroppedIterations,
-		LatencySamples:    snapshot.LatencySamples,
-		TotalLatencyNano:  snapshot.TotalLatencyNano,
-		MinLatencyNano:    snapshot.MinLatencyNano,
-		MaxLatencyNano:    snapshot.MaxLatencyNano,
-		P95LatencyNano:    snapshot.P95LatencyNano,
-		P99LatencyNano:    snapshot.P99LatencyNano,
-		P999LatencyNano:   snapshot.P999LatencyNano,
-		BytesRead:         snapshot.BytesRead,
-		BytesWritten:      snapshot.BytesWritten,
-		StatusCodes:       buildStatusCodeCounts(snapshot.StatusCodes),
-		StepMetrics:       buildRequestStepMetrics(steps),
+		StartedAtUnixMs:         snapshot.StartedAt.UnixMilli(),
+		AtUnixMs:                snapshot.At.UnixMilli(),
+		TotalRequests:           snapshot.TotalRequests,
+		SuccessRequests:         snapshot.SuccessRequests,
+		FailedRequests:          snapshot.FailedRequests,
+		TimeoutFailures:         snapshot.TimeoutFailures,
+		DNSFailures:             snapshot.DNSFailures,
+		TLSFailures:             snapshot.TLSFailures,
+		ConnRefused:             snapshot.ConnRefused,
+		OtherFailures:           snapshot.OtherFailures,
+		AssertionFailures:       snapshot.AssertionFailures,
+		AssertionFailuresByType: assertionFailureCounts(snapshot.AssertionFailuresByType),
+		CaptureFailures:         snapshot.CaptureFailures,
+		TemplateFailures:        snapshot.TemplateFailures,
+		DroppedIterations:       snapshot.DroppedIterations,
+		LatencySamples:          snapshot.LatencySamples,
+		TotalLatencyNano:        snapshot.TotalLatencyNano,
+		MinLatencyNano:          snapshot.MinLatencyNano,
+		MaxLatencyNano:          snapshot.MaxLatencyNano,
+		P95LatencyNano:          snapshot.P95LatencyNano,
+		P99LatencyNano:          snapshot.P99LatencyNano,
+		P999LatencyNano:         snapshot.P999LatencyNano,
+		BytesRead:               snapshot.BytesRead,
+		BytesWritten:            snapshot.BytesWritten,
+		StatusCodes:             buildStatusCodeCounts(snapshot.StatusCodes),
+		StepMetrics:             buildRequestStepMetrics(steps),
+	}
+}
+
+func assertionFailureCounts(counts engine.AssertionFailureCounts) AssertionFailureCounts {
+	return AssertionFailureCounts{
+		Status:          counts.Status,
+		Header:          counts.Header,
+		JSON:            counts.JSON,
+		ResponseLatency: counts.ResponseLatency,
+		StepLatency:     counts.StepLatency,
+		CountOnly:       counts.CountOnly,
 	}
 }

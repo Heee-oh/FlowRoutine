@@ -1,9 +1,9 @@
-import type { Header, LoadProfile, MetricsBatch, QualityGate, RequestStepMetrics, ScenarioStep, StartRequest, StatusCodeCount } from "./types";
+import type { AssertionDefinition, AssertionFailureCounts, Header, LoadProfile, MetricsBatch, QualityGate, RequestStepMetrics, ScenarioStep, StartRequest, StatusCodeCount } from "./types";
 import type { MetricHistoryPoint } from "./metricHistory";
-import { redactHeaders, redactSensitiveURL } from "./secretSanitization";
+import { isSensitiveHeaderName, isSensitiveHeaderValue, redactHeaders, redactSensitiveURL } from "./secretSanitization";
 
 export type RunReport = {
-  schemaVersion: 7;
+  schemaVersion: 8;
   generatedAtUnixMs: number;
   run: {
     targetUrl: string;
@@ -56,6 +56,7 @@ type ReportScenarioStep = {
   captures?: Array<{ name: string; path: string; scope: string; onStatus: string }>;
   delayMs?: number;
   expectedStatus?: string;
+  assertion?: AssertionDefinition;
 };
 
 type ReportSummary = {
@@ -84,6 +85,7 @@ type ReportSummary = {
     connRefused: number;
     other: number;
     assertions: number;
+    assertionTypes: AssertionFailureCounts;
     captures: number;
     templates: number;
   };
@@ -165,7 +167,7 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
   const averageRps = elapsedMs > 0 ? total / (elapsedMs / 1_000) : 0;
 
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     generatedAtUnixMs: Date.now(),
     run: {
       targetUrl: redactSensitiveURL(request.config.url),
@@ -222,6 +224,7 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
         connRefused: finalBatch.connRefused,
         other: finalBatch.otherErrors,
         assertions: finalBatch.assertionsFailed,
+        assertionTypes: normalizedAssertionFailures(finalBatch.assertionFailuresByType),
         captures: finalBatch.captureFailures,
         templates: finalBatch.templateFailures,
       },
@@ -365,6 +368,7 @@ function baselineKey(request: StartRequest) {
       canonicalURL(step.url ?? ""),
       step.delayMs ?? "",
       step.expectedStatus ?? "",
+      JSON.stringify(step.assertion ? redactAssertion(step.assertion) : null),
     ].join(":"))
     .join("|");
   return stableHash([
@@ -559,6 +563,31 @@ function redactScenarioStep(step: ScenarioStep): ReportScenarioStep {
     name: step.name,
     kind: step.kind,
     expectedStatus: step.expectedStatus,
+    assertion: step.assertion ? redactAssertion(step.assertion) : undefined,
+  };
+}
+
+function redactAssertion(assertion: AssertionDefinition): AssertionDefinition {
+  const sensitiveHeader = assertion.type === "header" && (
+    isSensitiveHeaderName(assertion.headerName ?? "") || isSensitiveHeaderValue(assertion.expected ?? "")
+  );
+  const sensitiveJSON = assertion.type === "json" &&
+    (assertion.valueType ?? "string") === "string" &&
+    (isSensitiveHeaderName(assertion.jsonPath ?? "") || isSensitiveHeaderValue(assertion.expected ?? ""));
+  if (sensitiveHeader || sensitiveJSON) {
+    return { ...assertion, expected: assertion.expected ? "<redacted>" : assertion.expected };
+  }
+  return { ...assertion };
+}
+
+function normalizedAssertionFailures(counts: AssertionFailureCounts | undefined): AssertionFailureCounts {
+  return {
+    status: counts?.status ?? 0,
+    header: counts?.header ?? 0,
+    json: counts?.json ?? 0,
+    responseLatency: counts?.responseLatency ?? 0,
+    stepLatency: counts?.stepLatency ?? 0,
+    countOnly: counts?.countOnly ?? 0,
   };
 }
 
@@ -568,6 +597,9 @@ function redactRequestStepMetrics(step: RequestStepMetrics): RequestStepMetrics 
     name: redactSensitiveURL(step.name),
     runLatency: { ...step.runLatency },
     statusCodes: step.statusCodes.map((status) => ({ ...status })),
+    ...(step.assertionFailuresByType
+      ? { assertionFailuresByType: normalizedAssertionFailures(step.assertionFailuresByType) }
+      : {}),
   };
 }
 

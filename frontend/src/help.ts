@@ -7,7 +7,7 @@ export type HelpItem = { title: string; description: Record<HelpLanguage, string
 export const overviewHelpItems: HelpItem[] = [
   helpItem("Request", "Target URL, method, headers, and body for HTTP traffic.", "부하 테스트에서 보낼 HTTP 요청의 URL, method, headers, body입니다."),
   helpItem("Engine", "Staged VU or arrival-rate profiles, timeout, connection cap, and request RPS cap.", "단계형 VU 또는 arrival-rate profile, timeout, max conns, request RPS limit을 제어합니다."),
-  helpItem("Assert", "Expected response status check for scenario requests.", "요청 응답 status code가 expected status와 맞는지 확인합니다."),
+  helpItem("Assert", "Checks response status, headers, typed JSON values, or response and step latency.", "응답 status, header, typed JSON 값, response/step latency를 확인합니다."),
   helpItem("Delay", "Wait time inserted when the node is on the Request through Engine path.", "Request에서 Engine으로 이어지는 실행 경로에 있을 때 요청 사이에 delay를 넣습니다."),
   helpItem("Metrics", "Batch interval and latency sampling for live measurements.", "실시간 metrics 전송 주기와 latency sampling 빈도를 설정합니다."),
   helpItem("Window", "How long realtime chart points are retained in the UI.", "실시간 chart points가 UI에 유지되는 시간을 설정합니다."),
@@ -34,7 +34,10 @@ export const nodeHelpItems: Record<FlowNodeKind, HelpItem[]> = {
     helpItem("Request rate cap", "Optional global request cap for VU profiles. Arrival-rate profiles control iteration starts and disable this cap.", "VU profile의 선택적 전체 request 제한입니다. Arrival-rate profile은 iteration 시작률을 제어하므로 이 제한을 비활성화합니다."),
   ],
   assertion: [
-    helpItem("Expected status", "Status code rule checked after a request, such as 200 or 2xx.", "Request 후 확인할 status code 규칙입니다. 예: 200, 2xx"),
+    helpItem("Assertion type", "Check status, header presence or value, a typed JSON path value, HTTP response latency, or end-to-end request-step latency.", "Status, header 존재/값, typed JSON path 값, HTTP response latency, 전체 request-step latency를 확인합니다."),
+    helpItem("Typed JSON", "JSON equality distinguishes strings, finite numbers, booleans, and null. Exists only requires the path to resolve.", "JSON equality는 string, finite number, boolean, null 타입을 구분합니다. Exists는 path가 존재하는지만 확인합니다."),
+    helpItem("Latency", "Response latency measures the HTTP exchange. Step latency also includes pacing, template rendering, and captures.", "Response latency는 HTTP 통신 시간을 측정합니다. Step latency에는 pacing, template rendering, capture도 포함됩니다."),
+    helpItem("On failure", "Continue records and proceeds, Stop ends the current iteration, and Count only records the typed diagnostic without increasing enforced assertion failures.", "Continue는 기록 후 계속하고, Stop은 현재 iteration을 끝내며, Count only는 enforced assertion failure를 늘리지 않고 유형별 진단만 기록합니다."),
   ],
   delay: [
     helpItem("Delay ms", "Wait time in milliseconds when this node is on the Request through Engine path.", "이 node가 Request에서 Engine으로 가는 path에 있을 때 적용되는 wait time입니다."),
