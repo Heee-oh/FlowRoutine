@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -89,8 +90,11 @@ func TestBuildMetricsBatchUsesSnapshotDelta(t *testing.T) {
 	if batch.RPS != 200 {
 		t.Fatalf("got rps %f, want 200", batch.RPS)
 	}
-	if batch.AvgLatencyMs != 2 {
-		t.Fatalf("got avg latency %f, want 2", batch.AvgLatencyMs)
+	if batch.IntervalLatency.AvgMs != 2 {
+		t.Fatalf("got interval avg latency %f, want 2", batch.IntervalLatency.AvgMs)
+	}
+	if math.Abs(batch.RunLatency.AvgMs-(5.0/3.0)) > 0.0001 {
+		t.Fatalf("got run avg latency %f, want %f", batch.RunLatency.AvgMs, 5.0/3.0)
 	}
 	if !batch.Running || batch.Total != 30 || batch.Success != 25 || batch.Failed != 5 {
 		t.Fatalf("unexpected batch: %+v", batch)
@@ -106,12 +110,56 @@ func TestBuildMetricsBatchUsesSnapshotDelta(t *testing.T) {
 	}
 }
 
+func TestBuildMetricsBatchSeparatesIntervalAndRunLatency(t *testing.T) {
+	previousAt := time.Unix(10, 0)
+	currentAt := previousAt.Add(time.Second)
+	previousBuckets := latencyBucketsSnapshot(map[int]uint64{18: 90})
+	currentBuckets := latencyBucketsSnapshot(map[int]uint64{9: 10, 18: 90})
+
+	batch := buildMetricsBatch(
+		engine.Snapshot{
+			At:               previousAt,
+			LatencySamples:   90,
+			TotalLatencyNano: uint64(90 * time.Second),
+			LatencyBuckets:   previousBuckets,
+		},
+		engine.Snapshot{
+			At:               currentAt,
+			LatencySamples:   100,
+			TotalLatencyNano: uint64(90*time.Second + 10*time.Millisecond),
+			MinLatencyNano:   uint64(time.Millisecond),
+			MaxLatencyNano:   uint64(time.Second),
+			LatencyBuckets:   currentBuckets,
+		},
+		false,
+		currentAt,
+	)
+
+	if batch.IntervalLatency.Samples != 10 || batch.IntervalLatency.P95Ms != 1 {
+		t.Fatalf("unexpected interval latency: %+v", batch.IntervalLatency)
+	}
+	if batch.RunLatency.Samples != 100 || batch.RunLatency.P95Ms != 1000 {
+		t.Fatalf("unexpected run latency: %+v", batch.RunLatency)
+	}
+	if math.Abs(batch.RunLatency.AvgMs-900.1) > 0.0001 {
+		t.Fatalf("got run avg latency %f, want 900.1", batch.RunLatency.AvgMs)
+	}
+}
+
 func statusCodesSnapshot(values map[int]uint64) [engine.HTTPStatusCount]uint64 {
 	var statusCodes [engine.HTTPStatusCount]uint64
 	for code, count := range values {
 		statusCodes[code] = count
 	}
 	return statusCodes
+}
+
+func latencyBucketsSnapshot(values map[int]uint64) [engine.LatencyBucketCount]uint64 {
+	var buckets [engine.LatencyBucketCount]uint64
+	for bucket, count := range values {
+		buckets[bucket] = count
+	}
+	return buckets
 }
 
 func TestBatcherEmitsOnTick(t *testing.T) {
