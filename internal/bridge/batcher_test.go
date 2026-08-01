@@ -250,17 +250,20 @@ func TestBuildMetricsBatchIncludesBranchRouteDiagnostics(t *testing.T) {
 
 func TestStepMetricsEmissionIsThrottledAndForcedAtCompletion(t *testing.T) {
 	startedAt := time.Unix(1, 0)
-	if !shouldIncludeStepMetrics(time.Time{}, startedAt, false) {
+	if !shouldIncludeStepMetrics(time.Time{}, startedAt, false, true) {
 		t.Fatal("first step-metrics snapshot should be included")
 	}
-	if shouldIncludeStepMetrics(startedAt, startedAt.Add(StepMetricsInterval-time.Millisecond), false) {
+	if shouldIncludeStepMetrics(startedAt, startedAt.Add(StepMetricsInterval-time.Millisecond), false, true) {
 		t.Fatal("step metrics should be omitted inside the throttle interval")
 	}
-	if !shouldIncludeStepMetrics(startedAt, startedAt.Add(StepMetricsInterval), false) {
+	if !shouldIncludeStepMetrics(startedAt, startedAt.Add(StepMetricsInterval), false, true) {
 		t.Fatal("step metrics should be included after the throttle interval")
 	}
-	if !shouldIncludeStepMetrics(startedAt, startedAt.Add(time.Millisecond), true) {
+	if !shouldIncludeStepMetrics(startedAt, startedAt.Add(time.Millisecond), true, true) {
 		t.Fatal("final step metrics should always be included")
+	}
+	if !shouldIncludeStepMetrics(startedAt, startedAt.Add(time.Millisecond), false, false) {
+		t.Fatal("terminal batches should always include diagnostic metrics")
 	}
 }
 

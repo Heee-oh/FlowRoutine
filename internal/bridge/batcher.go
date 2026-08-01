@@ -162,9 +162,10 @@ func (b *Batcher) run(ctx context.Context, done chan struct{}) {
 	lastStepMetricsAt := time.Time{}
 	emit := func(now time.Time, forceStepMetrics bool) {
 		current := b.engine.Snapshot()
+		running := b.engine.Running()
 		var stepSnapshots []engine.RequestStepSnapshot
 		var branchSnapshots []engine.BranchRouteSnapshot
-		if shouldIncludeStepMetrics(lastStepMetricsAt, now, forceStepMetrics) {
+		if shouldIncludeStepMetrics(lastStepMetricsAt, now, forceStepMetrics, running) {
 			stepSnapshots = b.engine.RequestStepSnapshots()
 			branchSnapshots = b.engine.BranchRouteSnapshots()
 			lastStepMetricsAt = now
@@ -172,7 +173,7 @@ func (b *Batcher) run(ctx context.Context, done chan struct{}) {
 		b.emitter.Emit(
 			ctx,
 			MetricsBatchEvent,
-			buildMetricsBatchWithDiagnostics(previous, current, b.engine.Running(), now, stepSnapshots, branchSnapshots),
+			buildMetricsBatchWithDiagnostics(previous, current, running, now, stepSnapshots, branchSnapshots),
 		)
 		previous = current
 	}
@@ -292,8 +293,8 @@ func buildMetricsBatchWithDiagnostics(
 	}
 }
 
-func shouldIncludeStepMetrics(last time.Time, now time.Time, force bool) bool {
-	return force || last.IsZero() || now.Sub(last) >= StepMetricsInterval
+func shouldIncludeStepMetrics(last time.Time, now time.Time, force bool, running bool) bool {
+	return force || !running || last.IsZero() || now.Sub(last) >= StepMetricsInterval
 }
 
 func buildRequestStepMetrics(snapshots []engine.RequestStepSnapshot) []RequestStepMetrics {
