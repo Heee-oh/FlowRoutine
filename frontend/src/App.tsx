@@ -34,6 +34,7 @@ import { parseHarArchive } from "./harImport";
 import type { HelpLanguage, HelpTopic } from "./help";
 import { downloadK6Script } from "./k6Export";
 import { parsePostmanCollection } from "./postmanImport";
+import { purgeLegacyRunBaselines } from "./report";
 import { DEFAULT_METRIC_WINDOW_MS, useLoadStore, useMetricsStore } from "./store";
 import type { OpenAPIEndpoint, OpenAPIImportResponse, StartRequest } from "./types";
 import { importOpenAPI, onMetricsBatch, preflightLoad, startLoad, stopLoad } from "./wails";
@@ -79,6 +80,10 @@ export function App() {
     () => getMetricWindowMs(flowNodes, flowEdges) || DEFAULT_METRIC_WINDOW_MS,
     [flowEdges, flowNodes],
   );
+
+  useEffect(() => {
+    purgeLegacyRunBaselines();
+  }, []);
 
   useEffect(() => onMetricsBatch((batch) => {
     pushBatch(batch);

@@ -1,7 +1,8 @@
 import type { Header, MetricsBatch, QualityGate, ScenarioStep, StartRequest, StatusCodeCount } from "./types";
+import { redactHeaders, redactSensitiveURL } from "./secretSanitization";
 
 export type RunReport = {
-  schemaVersion: 2;
+  schemaVersion: 3;
   generatedAtUnixMs: number;
   run: {
     targetUrl: string;
@@ -113,7 +114,7 @@ export type BaselineComparison = {
 };
 
 type BaselineSnapshot = {
-  schemaVersion: 2;
+  schemaVersion: 3;
   key: string;
   savedAtUnixMs: number;
   targetUrl: string;
@@ -124,7 +125,11 @@ type BaselineSnapshot = {
   p99LatencyMs: number;
 };
 
-const baselineStorageKey = "flowroutine:run-baselines:v2";
+const baselineStorageKey = "flowroutine:run-baselines:v3";
+const legacyBaselineStorageKeys = [
+  "flowroutine:run-baselines:v1",
+  "flowroutine:run-baselines:v2",
+];
 const maxBaselines = 24;
 
 export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): RunReport {
@@ -140,10 +145,10 @@ export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): 
   const averageRps = elapsedMs > 0 ? total / (elapsedMs / 1_000) : 0;
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAtUnixMs: Date.now(),
     run: {
-      targetUrl: request.config.url,
+      targetUrl: redactSensitiveURL(request.config.url),
       method: request.config.method,
       startedAtUnixMs,
       finishedAtUnixMs,
@@ -195,7 +200,10 @@ export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): 
         read: finalBatch.bytesRead,
         written: finalBatch.bytesWritten,
       },
-      statusCodes: finalBatch.statusCodes,
+      statusCodes: finalBatch.statusCodes.map((status) => ({
+        code: status.code,
+        count: status.count,
+      })),
     },
     qualityGate: evaluateQualityGate(qualityGate, finalBatch, averageRps),
     baseline: {
@@ -229,6 +237,17 @@ export function applyBaselineComparison(report: RunReport, request: StartRequest
     return { ...report, baseline };
   } catch {
     return report;
+  }
+}
+
+export function purgeLegacyRunBaselines() {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    removeLegacyBaselines();
+  } catch {
+    // Storage can be unavailable in restricted browser contexts.
   }
 }
 
@@ -287,7 +306,13 @@ function nonNegative(value: number | undefined, fallback: number) {
 
 function baselineKey(request: StartRequest) {
   const scenarioSignature = request.config.scenarioSteps
-    .map((step) => [step.kind, step.method ?? "", step.url ?? "", step.delayMs ?? "", step.expectedStatus ?? ""].join(":"))
+    .map((step) => [
+      step.kind,
+      step.method ?? "",
+      canonicalURL(step.url ?? ""),
+      step.delayMs ?? "",
+      step.expectedStatus ?? "",
+    ].join(":"))
     .join("|");
   return stableHash([
     request.config.method,
@@ -298,7 +323,7 @@ function baselineKey(request: StartRequest) {
 
 function buildBaselineSnapshot(key: string, report: RunReport): BaselineSnapshot {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     key,
     savedAtUnixMs: report.generatedAtUnixMs,
     targetUrl: report.run.targetUrl,
@@ -361,6 +386,7 @@ function percentDelta(current: number, previous: number) {
 }
 
 function readBaselines(): Record<string, BaselineSnapshot> {
+  removeLegacyBaselines();
   const raw = window.localStorage.getItem(baselineStorageKey);
   if (!raw) {
     return {};
@@ -372,11 +398,12 @@ function readBaselines(): Record<string, BaselineSnapshot> {
   return Object.fromEntries(
     Object.entries(parsed)
       .filter(([, value]) => isBaselineSnapshot(value))
-      .map(([key, value]) => [key, value as BaselineSnapshot]),
+      .map(([key, value]) => [key, sanitizeBaselineSnapshot(key, value as BaselineSnapshot)]),
   );
 }
 
 function writeBaselines(baselines: Record<string, BaselineSnapshot>) {
+  removeLegacyBaselines();
   const entries = Object.entries(baselines)
     .sort(([, a], [, b]) => b.savedAtUnixMs - a.savedAtUnixMs)
     .slice(0, maxBaselines);
@@ -388,22 +415,45 @@ function isBaselineSnapshot(value: unknown): value is BaselineSnapshot {
     return false;
   }
   const snapshot = value as BaselineSnapshot;
-  return snapshot.schemaVersion === 2 &&
+  return snapshot.schemaVersion === 3 &&
     typeof snapshot.key === "string" &&
     typeof snapshot.savedAtUnixMs === "number" &&
+    typeof snapshot.targetUrl === "string" &&
+    typeof snapshot.method === "string" &&
     typeof snapshot.averageRps === "number" &&
     typeof snapshot.failureRate === "number" &&
     typeof snapshot.p95LatencyMs === "number" &&
     typeof snapshot.p99LatencyMs === "number";
 }
 
+function sanitizeBaselineSnapshot(key: string, snapshot: BaselineSnapshot): BaselineSnapshot {
+  return {
+    schemaVersion: 3,
+    key,
+    savedAtUnixMs: snapshot.savedAtUnixMs,
+    targetUrl: redactSensitiveURL(snapshot.targetUrl),
+    method: snapshot.method,
+    averageRps: snapshot.averageRps,
+    failureRate: snapshot.failureRate,
+    p95LatencyMs: snapshot.p95LatencyMs,
+    p99LatencyMs: snapshot.p99LatencyMs,
+  };
+}
+
 function canonicalURL(rawURL: string) {
+  const sanitizedURL = redactSensitiveURL(rawURL);
   try {
-    const url = new URL(rawURL);
+    const url = new URL(sanitizedURL);
     url.hash = "";
     return url.toString();
   } catch {
-    return rawURL.trim();
+    return sanitizedURL.trim();
+  }
+}
+
+function removeLegacyBaselines() {
+  for (const key of legacyBaselineStorageKeys) {
+    window.localStorage.removeItem(key);
   }
 }
 
@@ -429,11 +479,14 @@ function redactScenarioStep(step: ScenarioStep): ReportScenarioStep {
   if (step.kind === "request") {
     return {
       kind: step.kind,
-      url: step.url,
+      url: redactSensitiveURL(step.url ?? ""),
       method: step.method,
       headers: redactHeaders(step.headers ?? []),
       bodyBytes: byteLength(step.body ?? ""),
-      captures: step.captures ?? [],
+      captures: (step.captures ?? []).map((capture) => ({
+        name: capture.name,
+        path: capture.path,
+      })),
     };
   }
   if (step.kind === "delay") {
@@ -446,17 +499,6 @@ function redactScenarioStep(step: ScenarioStep): ReportScenarioStep {
     kind: step.kind,
     expectedStatus: step.expectedStatus,
   };
-}
-
-function redactHeaders(headers: Header[]) {
-  return headers.map((header) => ({
-    name: header.name,
-    value: isSensitiveHeader(header.name) ? "[redacted]" : header.value,
-  }));
-}
-
-function isSensitiveHeader(name: string) {
-  return /authorization|cookie|token|secret|api[-_]?key/i.test(name);
 }
 
 function byteLength(value: string) {

@@ -1,4 +1,9 @@
 import type { FlowNodeData } from "./flowTypes";
+import {
+  sanitizeHeaderRows,
+  sanitizeSensitiveURL,
+  sanitizeStructuredBody,
+} from "./secretSanitization";
 
 export type HarRequestImport = {
   name: string;
@@ -91,7 +96,7 @@ function entryToRequest(entry: HarEntry, index: number): HarRequestImport {
     name: requestName(method, url, index),
     settings: {
       method,
-      url,
+      url: sanitizeSensitiveURL(url),
       headersMode: "form",
       headerRows: normalizeHeaderRows(request?.headers),
       headersText: normalizeHeaders(request?.headers),
@@ -101,12 +106,12 @@ function entryToRequest(entry: HarEntry, index: number): HarRequestImport {
 }
 
 function normalizeHeaderRows(headers: HarHeader[] | undefined) {
-  return (headers ?? [])
+  return sanitizeHeaderRows((headers ?? [])
     .filter((header) => header.name && !isHopByHopHeader(header.name))
     .map((header) => ({
       name: header.name ?? "",
-      value: isSensitiveHeader(header.name ?? "") ? `{{${placeholderName(header.name ?? "")}}}` : header.value ?? "",
-    }));
+      value: header.value ?? "",
+    })));
 }
 
 function normalizeHeaders(headers: HarHeader[] | undefined) {
@@ -118,14 +123,14 @@ function normalizeBody(postData: HarPostData | undefined) {
     return "";
   }
   if (postData.text) {
-    return postData.text;
+    return sanitizeStructuredBody(postData.text);
   }
   if (postData.params && postData.params.length > 0) {
-    return new URLSearchParams(
+    return sanitizeStructuredBody(new URLSearchParams(
       postData.params
         .filter((param) => param.name)
         .map((param) => [param.name ?? "", param.value ?? ""]),
-    ).toString();
+    ).toString());
   }
   return "";
 }
@@ -141,14 +146,6 @@ function requestName(method: string, rawURL: string, index: number) {
 
 function isHopByHopHeader(name: string) {
   return /^(accept-encoding|connection|content-length|host|user-agent)$/i.test(name);
-}
-
-function isSensitiveHeader(name: string) {
-  return /^(authorization|cookie|proxy-authorization)$/i.test(name);
-}
-
-function placeholderName(name: string) {
-  return name.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toUpperCase() || "SECRET";
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildRunReport } from "./report";
+import { applyBaselineComparison, buildRunReport, purgeLegacyRunBaselines } from "./report";
 import type { MetricsBatch, StartRequest } from "./types";
 
 describe("buildRunReport", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("uses cumulative run latency for summaries and quality gates", () => {
     const request: StartRequest = {
       config: {
@@ -83,4 +87,88 @@ describe("buildRunReport", () => {
     });
     expect(report.qualityGate.passed).toBe(false);
   });
+
+  it("redacts secrets from report URLs, headers, scenario metadata, and baseline keys", () => {
+    const request = createRequest();
+    request.config.url = "https://alice:password@example.com/items?access_token=report-url-secret";
+    request.config.headers = [
+      { name: "aUtHoRiZaTiOn", value: "Bearer report-auth-secret" },
+      { name: "Accept", value: "application/json" },
+    ];
+    request.config.scenarioSteps = [{
+      kind: "request",
+      method: "GET",
+      url: "https://example.com/items?X-Amz-Signature=report-step-secret",
+      headers: [{ name: "X-API-Key", value: "report-api-secret" }],
+    }];
+
+    const report = buildRunReport(request, []);
+    const serialized = JSON.stringify(report);
+    const otherSecrets = structuredClone(request);
+    otherSecrets.config.url = "https://bob:other@example.com/items?access_token=different";
+    otherSecrets.config.scenarioSteps[0].url = "https://example.com/items?X-Amz-Signature=different";
+
+    expect(report.schemaVersion).toBe(3);
+    expect(serialized).not.toMatch(/alice|password|report-(?:url|auth|step|api)-secret/);
+    expect(report.run.targetUrl).toContain("REDACTED");
+    expect(report.config.headers[0].value).toBe("[redacted]");
+    expect(report.config.scenarioSteps[0].url).toContain("REDACTED");
+    expect(buildRunReport(otherSecrets, []).baseline.key).toBe(report.baseline.key);
+  });
+
+  it("purges legacy baselines that may contain raw signed URLs", () => {
+    const removeItem = vi.fn();
+    vi.stubGlobal("window", { localStorage: { removeItem } });
+
+    purgeLegacyRunBaselines();
+
+    expect(removeItem).toHaveBeenCalledWith("flowroutine:run-baselines:v1");
+    expect(removeItem).toHaveBeenCalledWith("flowroutine:run-baselines:v2");
+  });
+
+  it("stores only redacted v3 baseline metadata", () => {
+    const values = new Map<string, string>([
+      ["flowroutine:run-baselines:v2", "legacy-baseline-secret"],
+    ]);
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+        removeItem: (key: string) => values.delete(key),
+      },
+    });
+    const request = createRequest();
+    request.config.url = "https://example.com?access_token=stored-url-secret";
+
+    applyBaselineComparison(buildRunReport(request, []), request);
+    const persisted = Array.from(values.values()).join("\n");
+
+    expect(values.has("flowroutine:run-baselines:v2")).toBe(false);
+    expect(values.has("flowroutine:run-baselines:v3")).toBe(true);
+    expect(persisted).not.toMatch(/legacy-baseline-secret|stored-url-secret/);
+    expect(persisted).toContain("REDACTED");
+  });
 });
+
+function createRequest(): StartRequest {
+  return {
+    config: {
+      url: "https://example.com",
+      method: "GET",
+      headers: [],
+      body: "",
+      virtualUsers: 1,
+      durationMs: 1_000,
+      requestTimeoutMs: 1_000,
+      maxConnsPerHost: 10,
+      readBufferSize: 4_096,
+      writeBufferSize: 4_096,
+      maxResponseBytes: 1_048_576,
+      latencySampleRate: 1,
+      rateLimitRps: 0,
+      rampUpMs: 0,
+      scenarioSteps: [],
+    },
+    batchIntervalMs: 1_000,
+  };
+}

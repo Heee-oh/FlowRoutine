@@ -1,4 +1,9 @@
 import type { FlowNodeData } from "./flowTypes";
+import {
+  sanitizeHeaderRows,
+  sanitizeSensitiveURL,
+  sanitizeStructuredBody,
+} from "./secretSanitization";
 
 export type PostmanRequestImport = {
   name: string;
@@ -81,7 +86,7 @@ function flattenItems(items: PostmanItem[], path: string[]): PostmanRequestImpor
     }
     const method = normalizeMethod(request.method);
     requests.push({
-      name: nextPath.join(" / ") || `${method} request`,
+      name: sanitizeSensitiveURL(nextPath.join(" / ") || `${method} request`),
       settings: {
         method,
         url: normalizeURL(request.url),
@@ -109,13 +114,13 @@ function normalizeMethod(method: string | undefined) {
 
 function normalizeURL(url: PostmanRequest["url"]) {
   if (typeof url === "string") {
-    return url;
+    return sanitizeSensitiveURL(url);
   }
   if (!isObject(url)) {
     return "http://127.0.0.1:8080";
   }
   if (url.raw) {
-    return url.raw;
+    return sanitizeSensitiveURL(url.raw);
   }
   const protocol = url.protocol || "http";
   const host = Array.isArray(url.host) ? url.host.join(".") : url.host || "127.0.0.1:8080";
@@ -127,14 +132,16 @@ function normalizeURL(url: PostmanRequest["url"]) {
     }
   }
   const queryString = query.toString();
-  return `${protocol}://${host}${path ? `/${path.replace(/^\/+/, "")}` : ""}${queryString ? `?${queryString}` : ""}`;
+  return sanitizeSensitiveURL(
+    `${protocol}://${host}${path ? `/${path.replace(/^\/+/, "")}` : ""}${queryString ? `?${queryString}` : ""}`,
+  );
 }
 
 function normalizeHeaderRows(headers: PostmanHeader[] | undefined) {
-  return (headers ?? [])
+  return sanitizeHeaderRows((headers ?? [])
     .filter((header) => !header.disabled)
     .map((header) => ({ name: header.key || header.name || "", value: header.value ?? "" }))
-    .filter((header) => header.name.trim());
+    .filter((header) => header.name.trim()));
 }
 
 function normalizeHeaders(headers: PostmanHeader[] | undefined) {
@@ -146,17 +153,17 @@ function normalizeBody(body: PostmanRequest["body"]) {
     return "";
   }
   if (body.mode === "raw") {
-    return body.raw ?? "";
+    return sanitizeStructuredBody(body.raw ?? "");
   }
   if (body.mode === "urlencoded") {
-    return new URLSearchParams(activeKeyValueRows(body.urlencoded)).toString();
+    return sanitizeStructuredBody(new URLSearchParams(activeKeyValueRows(body.urlencoded)).toString());
   }
   if (body.mode === "formdata") {
-    return activeKeyValueRows(body.formdata)
+    return sanitizeStructuredBody(activeKeyValueRows(body.formdata)
       .map(([key, value]) => `${key}=${value}`)
-      .join("\n");
+      .join("\n"));
   }
-  return body.raw ?? "";
+  return sanitizeStructuredBody(body.raw ?? "");
 }
 
 function activeKeyValueRows(rows: Array<{ key?: string; value?: string; disabled?: boolean }> | undefined): [string, string][] {

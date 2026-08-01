@@ -1,6 +1,13 @@
 import type { Edge, Node } from "@xyflow/react";
 import { DEFAULT_METRIC_WINDOW_MS } from "./store";
 import { formatDuration } from "./format";
+import {
+  resolveSecretPlaceholders,
+  sanitizeHeaderRows,
+  sanitizeHeaderText,
+  sanitizeSensitiveURL,
+  sanitizeStructuredBody,
+} from "./secretSanitization";
 import type { Capture, Header, LoadConfig, OpenAPIEndpoint, PreflightResponse, ScenarioStep, StartRequest } from "./types";
 import type {
   FlowNodeData,
@@ -73,11 +80,11 @@ export function createFlowNode(
 export function openAPIEndpointToRequestSettings(endpoint: OpenAPIEndpoint, sourceURL: string): Partial<FlowNodeData> {
   const method = endpoint.method.toUpperCase();
   return {
-    url: openAPIEndpointURL(endpoint, sourceURL),
+    url: sanitizeSensitiveURL(openAPIEndpointURL(endpoint, sourceURL)),
     method,
     headersText: openAPIHeadersText(method),
     ...openAPIAuthSettings(endpoint),
-    body: endpoint.bodySample,
+    body: sanitizeStructuredBody(endpoint.bodySample),
   };
 }
 
@@ -127,10 +134,22 @@ export function buildStartRequestFromGraph(
   return {
     config: {
       ...fallback.config,
-      url: stringValue(requestNode.data.url, fallback.config.url).trim(),
+      url: resolveNodeSecrets(
+        requestNode,
+        stringValue(requestNode.data.url, fallback.config.url).trim(),
+        authSecrets,
+      ),
       method: stringValue(requestNode.data.method, fallback.config.method),
-      headers: parseHeaderText(headerTextFromNode(requestNode.data, authSecrets[requestNode.id])),
-      body: stringValue(requestNode.data.body, fallback.config.body),
+      headers: parseHeaderText(resolveNodeSecrets(
+        requestNode,
+        headerTextFromNode(requestNode.data, authSecrets[requestNode.id]),
+        authSecrets,
+      )),
+      body: resolveNodeSecrets(
+        requestNode,
+        stringValue(requestNode.data.body, fallback.config.body),
+        authSecrets,
+      ),
       virtualUsers: numberValue(engineNode.data.virtualUsers, fallback.config.virtualUsers),
       durationMs: numberValue(engineNode.data.durationMs, fallback.config.durationMs),
       requestTimeoutMs: numberValue(engineNode.data.requestTimeoutMs, fallback.config.requestTimeoutMs),
@@ -207,14 +226,30 @@ export function loadSavedScenarios(): SavedScenario[] {
   try {
     const raw = window.localStorage.getItem(savedScenariosKey);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter(isSavedScenario).slice(0, maxSavedScenarios) : [];
+    const scenarios = Array.isArray(parsed)
+      ? parsed.filter(isSavedScenario).slice(0, maxSavedScenarios).map(sanitizeSavedScenario)
+      : [];
+    const serialized = JSON.stringify(scenarios);
+    if (raw !== serialized) {
+      try {
+        window.localStorage.setItem(savedScenariosKey, serialized);
+      } catch {
+        try {
+          window.localStorage.removeItem(savedScenariosKey);
+        } catch {
+          // Return sanitized in-memory data even when storage is unavailable.
+        }
+      }
+    }
+    return scenarios;
   } catch {
     return [];
   }
 }
 
 export function saveScenario(scenario: SavedScenario) {
-  const scenarios = [scenario, ...loadSavedScenarios().filter((item) => item.id !== scenario.id)].slice(0, maxSavedScenarios);
+  const sanitized = sanitizeSavedScenario(scenario);
+  const scenarios = [sanitized, ...loadSavedScenarios().filter((item) => item.id !== sanitized.id)].slice(0, maxSavedScenarios);
   if (typeof window !== "undefined") {
     try {
       window.localStorage.setItem(savedScenariosKey, JSON.stringify(scenarios));
@@ -227,7 +262,7 @@ export function saveScenario(scenario: SavedScenario) {
 
 export function createSavedScenario(nodes: Node<FlowNodeData>[], edges: Edge[], request: StartRequest): SavedScenario {
   const method = request.config.method || "GET";
-  const target = getHost(request.config.url);
+  const target = persistedTargetName(request.config.url);
   return {
     id: `${Date.now()}`,
     name: `${method} ${target}`,
@@ -535,10 +570,14 @@ function nodeToScenarioStep(node: Node<FlowNodeData>, authSecrets: Record<string
     case "request":
       return {
         kind: "request",
-        url: stringValue(node.data.url, ""),
+        url: resolveNodeSecrets(node, stringValue(node.data.url, ""), authSecrets),
         method: stringValue(node.data.method, "GET"),
-        headers: parseHeaderText(headerTextFromNode(node.data, authSecrets[node.id])),
-        body: stringValue(node.data.body, ""),
+        headers: parseHeaderText(resolveNodeSecrets(
+          node,
+          headerTextFromNode(node.data, authSecrets[node.id]),
+          authSecrets,
+        )),
+        body: resolveNodeSecrets(node, stringValue(node.data.body, ""), authSecrets),
         captures: parseCaptureText(stringValue(node.data.capturesText, "")),
       };
     case "delay":
@@ -650,7 +689,40 @@ function stripSecretFields(data: FlowNodeData): FlowNodeData {
     apiKeyValue: _apiKeyValue,
     ...safeData
   } = data;
-  return safeData;
+  const sanitized: FlowNodeData = { ...safeData };
+  sanitized.label = sanitizeSensitiveURL(sanitized.label);
+  sanitized.caption = sanitizeSensitiveURL(sanitized.caption);
+  if (typeof sanitized.url === "string") {
+    sanitized.url = sanitizeSensitiveURL(sanitized.url);
+  }
+  if (typeof sanitized.headersText === "string") {
+    sanitized.headersText = sanitizeHeaderText(sanitized.headersText);
+  }
+  if (Array.isArray(sanitized.headerRows)) {
+    sanitized.headerRows = sanitizeHeaderRows(sanitized.headerRows.filter(isHeaderRow));
+  }
+  if (typeof sanitized.body === "string") {
+    sanitized.body = sanitizeStructuredBody(sanitized.body);
+  }
+  return sanitized;
+}
+
+function sanitizeSavedScenario(scenario: SavedScenario): SavedScenario {
+  return {
+    id: scenario.id,
+    name: sanitizeSensitiveURL(scenario.name),
+    savedAtUnixMs: scenario.savedAtUnixMs,
+    nodes: scenario.nodes.map(stripRuntimeNode),
+    edges: scenario.edges.map(stripRuntimeEdge),
+  };
+}
+
+function resolveNodeSecrets(
+  node: Node<FlowNodeData>,
+  value: string,
+  authSecrets: Record<string, RuntimeAuthSecret>,
+) {
+  return resolveSecretPlaceholders(value, authSecrets[node.id]?.bindings);
 }
 
 function stripRuntimeEdge(edge: Edge): Edge {
@@ -684,6 +756,14 @@ function isHeaderRow(value: unknown): value is HeaderRow {
 
 function isLocalHost(host: string) {
   return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".localhost");
+}
+
+function persistedTargetName(rawURL: string) {
+  try {
+    return new URL(rawURL).host || "target";
+  } catch {
+    return "custom target";
+  }
 }
 
 function isPrivateHost(host: string) {
