@@ -41,6 +41,68 @@ func BenchmarkAcquireReleaseRequest(b *testing.B) {
 	}
 }
 
+func BenchmarkAcquireReleaseTemplatedRequest(b *testing.B) {
+	engine, err := New(Config{
+		URL:             "http://127.0.0.1:8080",
+		MaxConnsPerHost: DefaultMaxConnsPerHost,
+		ScenarioSteps: []ScenarioStep{
+			{
+				Kind:     StepRequest,
+				URL:      "http://127.0.0.1:8080/session",
+				Captures: []VariableCapture{{Name: "token", Path: "token"}},
+			},
+			{
+				Kind:   StepRequest,
+				URL:    "http://127.0.0.1:8080/items/{{token}}",
+				Method: "POST",
+				Headers: []Header{{
+					Name:  "Authorization",
+					Value: "Bearer {{token}}",
+				}},
+				Body: []byte(`{"token":"{{token}}"}`),
+			},
+		},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	variables := newWorkerVariables()
+	variables.iteration["token"] = "benchmark-token"
+	step := engine.cfg.steps[1].request
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		req, err := engine.acquireRequest(step, variables)
+		if err != nil {
+			b.Fatal(err)
+		}
+		engine.releaseRequest(req)
+		variables.releaseRenderBuffer()
+	}
+}
+
+func BenchmarkCaptureVariables(b *testing.B) {
+	captures, err := compileVariableCaptures([]VariableCapture{
+		{Name: "token", Path: "$.data.token"},
+		{Name: "userID", Path: "$.data.user.id"},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	body := []byte(`{"data":{"token":"benchmark-token","user":{"id":42}}}`)
+	variables := newWorkerVariables()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		variables.beginIteration()
+		if err := captureVariables(body, 200, captures, variables); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkStatsRecordSuccess(b *testing.B) {
 	for _, virtualUsers := range statsBenchmarkVirtualUsers {
 		b.Run("VUs="+strconv.Itoa(virtualUsers), func(b *testing.B) {

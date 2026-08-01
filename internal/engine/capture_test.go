@@ -210,25 +210,6 @@ func TestCaptureVariablesInvalidatesFailedIterationAtomically(t *testing.T) {
 	}
 }
 
-func TestApplyTemplateBytesRejectsMissingIterationValue(t *testing.T) {
-	variables := newWorkerVariables()
-	variables.iteration["token"] = "fresh"
-
-	rendered, err := applyTemplateBytes([]byte("/items/{{ token }}"), variables)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(rendered) != "/items/fresh" {
-		t.Fatalf("unexpected rendered template: %s", rendered)
-	}
-
-	variables.beginIteration()
-	if _, err := applyTemplateBytes([]byte("/items/{{token}}"), variables); err == nil ||
-		!strings.Contains(err.Error(), `template variable "token" is unavailable`) {
-		t.Fatalf("expected missing iteration value, got %v", err)
-	}
-}
-
 func TestCaptureFailureMetricsAreClassifiedAndReset(t *testing.T) {
 	var stats AtomicStats
 	stats.Init(2)

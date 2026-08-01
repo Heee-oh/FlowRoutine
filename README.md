@@ -78,6 +78,10 @@ Engine counters use `min(VUs, 4 × GOMAXPROCS, 256)` stable stripes. Status-code
 snapshot scans, and reset work therefore stop growing with virtual users after the CPU-scaled stripe cap,
 while counters remain exact and latency percentiles retain the documented histogram precision.
 
+Request templates are parsed into literal and variable segments during configuration compilation. Each worker
+reuses one render buffer after warm-up; buffers above 64 KiB are released after the request. Static requests
+continue to use their compiled byte slices directly and retain the zero-allocation acquire/release path.
+
 ## Architecture
 
 ```text

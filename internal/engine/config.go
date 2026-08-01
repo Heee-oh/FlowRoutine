@@ -101,9 +101,9 @@ type compiledConfig struct {
 }
 
 type compiledHeader struct {
-	name      []byte
-	value     []byte
-	templated bool
+	name     []byte
+	value    []byte
+	template compiledTemplate
 }
 
 type compiledStepKind uint8
@@ -122,17 +122,17 @@ type compiledStep struct {
 }
 
 type compiledRequestStep struct {
-	clientIndex         int
-	requestURI          []byte
-	requestURITemplated bool
-	hostHeader          []byte
-	method              []byte
-	headers             []compiledHeader
-	body                []byte
-	bodyTemplated       bool
-	requestBytes        int
-	captures            []compiledVariableCapture
-	templateNames       []string
+	clientIndex        int
+	requestURI         []byte
+	requestURITemplate compiledTemplate
+	hostHeader         []byte
+	method             []byte
+	headers            []compiledHeader
+	body               []byte
+	bodyTemplate       compiledTemplate
+	requestBytes       int
+	captures           []compiledVariableCapture
+	templateNames      []string
 }
 
 type compiledVariableCapture struct {
@@ -216,7 +216,6 @@ func compileConfig(cfg Config) (compiledConfig, error) {
 	if firstRequest.requestURI == nil {
 		return compiledConfig{}, errors.New("scenario requires at least one request step")
 	}
-
 	return compiledConfig{
 		requestURI:        firstRequest.requestURI,
 		hostHeader:        firstRequest.hostHeader,
@@ -338,8 +337,7 @@ func compileRequestStep(step ScenarioStep, target *url.URL, defaultMethod string
 	if err != nil {
 		return compiledRequestStep{}, err
 	}
-	body := make([]byte, len(step.Body))
-	copy(body, step.Body)
+	body := append([]byte(nil), step.Body...)
 	captures, err := compileVariableCaptures(step.Captures)
 	if err != nil {
 		return compiledRequestStep{}, err
@@ -353,7 +351,12 @@ func compileRequestStep(step ScenarioStep, target *url.URL, defaultMethod string
 	if err != nil {
 		return compiledRequestStep{}, fmt.Errorf("request URL: %w", err)
 	}
-	bodyTemplates, err := parseTemplateNames(string(body))
+	requestURIBytes := []byte(uri)
+	requestURITemplate, _, err := compileTemplateBytes(requestURIBytes)
+	if err != nil {
+		return compiledRequestStep{}, fmt.Errorf("request URL template: %w", err)
+	}
+	bodyTemplate, bodyTemplates, err := compileTemplateBytes(body)
 	if err != nil {
 		return compiledRequestStep{}, fmt.Errorf("request body template: %w", err)
 	}
@@ -365,17 +368,17 @@ func compileRequestStep(step ScenarioStep, target *url.URL, defaultMethod string
 	}
 
 	return compiledRequestStep{
-		clientIndex:         clientIndex,
-		requestURI:          []byte(uri),
-		requestURITemplated: len(uriTemplates) > 0,
-		hostHeader:          []byte(target.Host),
-		method:              []byte(method),
-		headers:             headers,
-		body:                body,
-		bodyTemplated:       len(bodyTemplates) > 0,
-		requestBytes:        requestBytes,
-		captures:            captures,
-		templateNames:       templateNames,
+		clientIndex:        clientIndex,
+		requestURI:         requestURIBytes,
+		requestURITemplate: requestURITemplate,
+		hostHeader:         []byte(target.Host),
+		method:             []byte(method),
+		headers:            headers,
+		body:               body,
+		bodyTemplate:       bodyTemplate,
+		requestBytes:       requestBytes,
+		captures:           captures,
+		templateNames:      templateNames,
 	}, nil
 }
 
@@ -391,14 +394,15 @@ func compileHeaders(headers []Header) ([]compiledHeader, []string, error) {
 		} else if len(names) > 0 {
 			return nil, nil, errors.New("header names cannot contain templates")
 		}
-		names, err := parseTemplateNames(h.Value)
+		value := []byte(h.Value)
+		template, names, err := compileTemplateBytes(value)
 		if err != nil {
 			return nil, nil, fmt.Errorf("header %q value template: %w", h.Name, err)
 		}
 		compiled = append(compiled, compiledHeader{
-			name:      []byte(h.Name),
-			value:     []byte(h.Value),
-			templated: len(names) > 0,
+			name:     []byte(h.Name),
+			value:    value,
+			template: template,
 		})
 		templateNames = append(templateNames, names...)
 	}
@@ -458,36 +462,9 @@ func compileVariableCaptures(captures []VariableCapture) ([]compiledVariableCapt
 }
 
 func parseTemplateNames(value string) ([]string, error) {
-	names := make([]string, 0)
-	seen := make(map[string]struct{})
-	for offset := 0; offset < len(value); {
-		remaining := value[offset:]
-		start := strings.Index(remaining, "{{")
-		unexpectedClose := strings.Index(remaining, "}}")
-		if start < 0 {
-			if unexpectedClose >= 0 {
-				return nil, errors.New("contains an unexpected closing delimiter")
-			}
-			break
-		}
-		if unexpectedClose >= 0 && unexpectedClose < start {
-			return nil, errors.New("contains an unexpected closing delimiter")
-		}
-		start += offset
-		endOffset := strings.Index(value[start+2:], "}}")
-		if endOffset < 0 {
-			return nil, errors.New("contains an unclosed template")
-		}
-		end := start + 2 + endOffset
-		name := strings.TrimSpace(value[start+2 : end])
-		if err := validateVariableName(name); err != nil {
-			return nil, fmt.Errorf("variable %q: %w", name, err)
-		}
-		if _, exists := seen[name]; !exists {
-			seen[name] = struct{}{}
-			names = append(names, name)
-		}
-		offset = end + 2
+	_, names, err := compileTemplateBytes([]byte(value))
+	if err != nil {
+		return nil, err
 	}
 	return names, nil
 }
