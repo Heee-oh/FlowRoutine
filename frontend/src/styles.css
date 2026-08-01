@@ -97,6 +97,30 @@ small,
   gap: 14px;
 }
 
+.environment-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  padding: 14px;
+}
+
+.environment-heading,
+.environment-heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.environment-heading-actions .icon-button {
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+}
+
 .inspector {
   display: grid;
   gap: 14px;

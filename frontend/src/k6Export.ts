@@ -1,6 +1,7 @@
 import { normalizeCaptureDefinition, validateCapturePath } from "./captureValidation";
 import type { AssertionDefinition, Header, QualityGate, ScenarioStep, StartRequest } from "./types";
 import {
+  collectSecretPlaceholderNames,
   isSensitiveHeaderName,
   isSensitiveHeaderValue,
   sanitizeHeaderRows,
@@ -254,7 +255,16 @@ function scenarioSteps(request: StartRequest): ScenarioStep[] {
   const captureNames = new Set(
     steps.flatMap((step) => (step.captures ?? []).map((capture) => capture.name.trim())),
   );
-  return steps.map((step) => sanitizeScenarioStep(step, captureNames));
+  const preservedTemplateNames = new Set([
+    ...captureNames,
+    ...collectSecretPlaceholderNames(steps.flatMap((step) => [
+      step.url,
+      step.body,
+      step.assertion?.expected,
+      ...(step.headers ?? []).map((header) => header.value),
+    ])),
+  ]);
+  return steps.map((step) => sanitizeScenarioStep(step, preservedTemplateNames));
 }
 
 function sanitizeScenarioStep(
@@ -269,7 +279,11 @@ function sanitizeScenarioStep(
     const sensitiveJSON = assertion.type === "json" &&
       (assertion.valueType ?? "string") === "string" &&
       (isSensitiveHeaderName(assertion.jsonPath ?? "") || isSensitiveHeaderValue(assertion.expected ?? ""));
-    if ((sensitiveHeader || sensitiveJSON) && assertion.expected) {
+    if (
+      (sensitiveHeader || sensitiveJSON) &&
+      assertion.expected &&
+      !isRuntimeSecretTemplate(assertion.expected)
+    ) {
       return {
         ...step,
         assertion: {
@@ -291,6 +305,10 @@ function sanitizeScenarioStep(
     headers: sanitizeHeaderRows(step.headers ?? [], captureNames),
     body: sanitizeStructuredBody(step.body ?? "", captureNames),
   };
+}
+
+function isRuntimeSecretTemplate(value: string) {
+  return /^\s*(?:(?:basic|bearer|digest|hawk|token)\s+)?\{\{\s*SECRET_[A-Z0-9_]+\s*\}\}\s*$/i.test(value);
 }
 
 function renderStep(step: ScenarioStep, requestTimeout: string, trackStepLatency: boolean) {

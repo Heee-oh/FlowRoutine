@@ -10,7 +10,8 @@ import {
   loadSavedScenarios,
   parseCaptureText,
 } from "./flowModel";
-import type { FlowNodeData, SavedScenario } from "./flowTypes";
+import { buildK6Script } from "./k6Export";
+import type { EnvironmentProfile, FlowNodeData, SavedScenario } from "./flowTypes";
 import type { LoadConfig, PreflightResponse, StartRequest } from "./types";
 
 describe("assessStartSafety", () => {
@@ -168,6 +169,60 @@ describe("scenario secret handling", () => {
     expect(() => buildStartRequestFromGraph(nodes, initialFlowEdges, createRequest(), {})).toThrow(
       "Runtime secret SECRET_ACCESS_TOKEN is required",
     );
+  });
+
+  it("materializes one environment path for execution and keeps k6 secret references", () => {
+    const nodes = initialFlowNodes.map((node) => ({
+      ...node,
+      data: node.data.kind === "request"
+        ? {
+            ...node.data,
+            url: "{{BASE_URL}}/items?region={{REGION}}",
+            headersMode: "form" as const,
+            headerRows: [{ name: "Authorization", value: "Bearer {{SECRET_API_TOKEN}}" }],
+          }
+        : { ...node.data },
+    }));
+    const profile: EnvironmentProfile = {
+      id: "staging",
+      name: "Staging",
+      baseUrl: "https://staging.example.com",
+      variables: [{ name: "REGION", value: "ap-northeast-2" }],
+      secretNames: ["SECRET_API_TOKEN"],
+    };
+
+    const runtimeRequest = buildStartRequestFromGraph(nodes, initialFlowEdges, createRequest(), {}, {
+      profile,
+      secretBindings: { SECRET_API_TOKEN: "runtime-token" },
+    });
+    const exportRequest = buildStartRequestFromGraph(nodes, initialFlowEdges, createRequest(), {}, {
+      profile,
+      resolveSecrets: false,
+    });
+    const exportScript = buildK6Script(exportRequest);
+
+    expect(runtimeRequest.config.url).toBe("https://staging.example.com/items?region=ap-northeast-2");
+    expect(runtimeRequest.config.headers[0].value).toBe("Bearer runtime-token");
+    expect(runtimeRequest.runtimeSecretValues).toEqual(["runtime-token"]);
+    expect(runtimeRequest.config.scenarioSteps[0].name).not.toContain("runtime-token");
+    expect(exportRequest.config.url).toBe("https://staging.example.com/items?region=ap-northeast-2");
+    expect(exportRequest.config.headers[0].value).toBe("Bearer {{SECRET_API_TOKEN}}");
+    expect(exportRequest.runtimeSecretValues).toBeUndefined();
+    expect(exportScript).toContain("https://staging.example.com/items?region=ap-northeast-2");
+    expect(exportScript).toContain("Bearer {{SECRET_API_TOKEN}}");
+    expect(() => buildStartRequestFromGraph(nodes, initialFlowEdges, createRequest(), {}, { profile })).toThrow(
+      "Runtime secret SECRET_API_TOKEN is required",
+    );
+    expect(() => buildStartRequestFromGraph(nodes, initialFlowEdges, createRequest(), {})).toThrow(
+      "Environment variable BASE_URL is required",
+    );
+  });
+
+  it("persists only the selected environment reference with a scenario", () => {
+    const scenario = createSavedScenario(initialFlowNodes, initialFlowEdges, createRequest(), "staging");
+
+    expect(scenario.environmentProfileId).toBe("staging");
+    expect(JSON.stringify(scenario)).not.toContain("runtime-token");
   });
 });
 

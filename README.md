@@ -23,6 +23,7 @@ Built with OpenAI Codex assistance.
 - **Visual scenario editing**: Build request, delay, assertion, engine, metrics, and chart-window nodes on a React Flow canvas.
 - **Postman/OpenAPI/HAR import**: Turn Postman Collection v2 JSON files, OpenAPI or Swagger JSON/YAML endpoints, or browser HAR captures into runnable scenario nodes.
 - **Stateful API flows**: Capture JSON response values and reuse them as `{{variables}}` in later request URLs, headers, or bodies.
+- **Named environments**: Switch `{{BASE_URL}}` and uppercase variables per profile while keeping `SECRET_*` values memory-only.
 - **Local load engine**: Run staged virtual-user or arrival-rate profiles locally with goroutines, `fasthttp`, keep-alive reuse, and pooled request/response objects.
 - **Realtime feedback**: Track RPS, latency, failures, status code counts, and bounded live chart data through batched Wails events.
 - **Shareable local reports**: Export completed runs as redacted JSON reports with summary metrics, error breakdowns, status codes, and timeline points.
@@ -53,7 +54,7 @@ go build ./...
 | --- | --- |
 | Scenario canvas | Request, Engine, Metrics, Window, Delay, and Assert nodes |
 | Import | OpenAPI / Swagger JSON or YAML URL import, Postman Collection v2 JSON import, and browser HAR import |
-| Request setup | Method, URL, headers, body, auth helpers, JSON capture variables, and recent run loading |
+| Request setup | Named environments, method, URL, headers, body, auth helpers, JSON capture variables, and recent run loading |
 | Execution | Linear path execution from Request through Engine, with Delay and typed Assert support |
 | Engine | Constant/ramping VUs, constant/ramping arrival rate, graceful stop, RPS cap, timeouts, max connections, keep-alive reuse |
 | Metrics | RPS, aggregate and request-step counts, latency percentiles, transport failures, typed assertion failures, dropped iterations, and HTTP status diagnostics |
@@ -121,6 +122,12 @@ Request templates are parsed into literal and variable segments during configura
 reuses one render buffer after warm-up; buffers above 64 KiB are released after the request. Static requests
 continue to use their compiled byte slices directly and retain the zero-allocation acquire/release path.
 
+Environment profiles persist a name, optional base URL, uppercase non-secret variables, and secret binding names.
+Use `{{BASE_URL}}`, `{{REGION}}`, or similar placeholders in nodes. Selecting a profile materializes the same
+non-secret values before local preflight and k6 export. `SECRET_*` values are masked, kept in memory only, and
+exported as k6 `__ENV` bindings; missing required values block local execution with a named diagnostic. Recent-run
+history stores only the selected environment profile ID and sanitized scenario placeholders.
+
 ### k6 export compatibility
 
 Exports map all four execution profiles to k6's equivalent `constant-vus`, `ramping-vus`,
@@ -184,7 +191,7 @@ Load testing can disrupt real services. FlowRoutine includes RPS caps, ramp-up c
 
 - Graph execution follows one selected linear scenario path.
 - Distributed load generation is not implemented.
-- Auth secret values are memory-only and are not saved in recent-run history.
+- Environment and auth secret values are memory-only and are not saved in profiles or recent-run history.
 
 ## License
 

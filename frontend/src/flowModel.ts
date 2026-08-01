@@ -5,6 +5,10 @@ import { formatDuration } from "./format";
 import { compileScenarioGraph, type CompiledScenarioGraph } from "./graphCompiler";
 import { isArrivalMode, legacyLoadProfile, loadProfileSummary } from "./loadProfile";
 import {
+  environmentVariableBindings,
+  resolveEnvironmentPlaceholders,
+} from "./environmentProfiles";
+import {
   resolveSecretPlaceholders,
   sanitizeHeaderRows,
   sanitizeHeaderText,
@@ -17,6 +21,7 @@ import type {
   FlowNodeKind,
   FlowNodeTemplate,
   HeaderRow,
+  RuntimeEnvironment,
   RuntimeAuthSecret,
   SafetyAssessment,
   SavedScenario,
@@ -116,6 +121,7 @@ export function buildStartRequestFromGraph(
   edges: Edge[],
   fallback: StartRequest,
   authSecrets: Record<string, RuntimeAuthSecret>,
+  runtimeEnvironment?: RuntimeEnvironment,
 ): StartRequest {
   const compiled = compileScenarioGraph(nodes, edges);
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
@@ -125,10 +131,18 @@ export function buildStartRequestFromGraph(
   if (!requestNode || !engineNode) {
     throw new Error("Scenario graph changed after validation; validate it again before starting.");
   }
+  const captureNames = scenarioCaptureNames(compiled, nodesById);
+  const environmentBindings = environmentVariableBindings(runtimeEnvironment?.profile, captureNames);
   const scenarioSteps = compiled.path
     .map((id) => nodesById.get(id))
     .filter(isRunnableScenarioNode)
-    .map((node) => nodeToScenarioStep(node, authSecrets))
+    .map((node) => nodeToScenarioStep(
+      node,
+      authSecrets,
+      environmentBindings,
+      captureNames,
+      runtimeEnvironment,
+    ))
     .filter((step): step is ScenarioStep => Boolean(step));
   const loadProfile = engineNode.data.loadProfile ?? legacyLoadProfile({
     virtualUsers: numberValue(engineNode.data.virtualUsers, fallback.config.virtualUsers),
@@ -137,25 +151,35 @@ export function buildStartRequestFromGraph(
     requestTimeoutMs: numberValue(engineNode.data.requestTimeoutMs, fallback.config.requestTimeoutMs),
   });
   const profileSummary = loadProfileSummary(loadProfile);
+  const secretValues = collectRuntimeSecretValues(authSecrets, runtimeEnvironment);
 
   return {
     config: {
       ...fallback.config,
-      url: resolveNodeSecrets(
+      url: resolveNodeTemplates(
         requestNode,
         stringValue(requestNode.data.url, fallback.config.url).trim(),
         authSecrets,
+        environmentBindings,
+        captureNames,
+        runtimeEnvironment,
       ),
       method: stringValue(requestNode.data.method, fallback.config.method),
-      headers: parseHeaderText(resolveNodeSecrets(
+      headers: parseHeaderText(resolveNodeTemplates(
         requestNode,
         headerTextFromNode(requestNode.data, authSecrets[requestNode.id]),
         authSecrets,
+        environmentBindings,
+        captureNames,
+        runtimeEnvironment,
       )),
-      body: resolveNodeSecrets(
+      body: resolveNodeTemplates(
         requestNode,
         stringValue(requestNode.data.body, fallback.config.body),
         authSecrets,
+        environmentBindings,
+        captureNames,
+        runtimeEnvironment,
       ),
       virtualUsers: profileSummary.maxVirtualUsers,
       durationMs: profileSummary.durationMs,
@@ -174,6 +198,7 @@ export function buildStartRequestFromGraph(
     },
     batchIntervalMs: numberValue(metricsNode?.data.batchIntervalMs, fallback.batchIntervalMs),
     qualityGate: qualityGateFromMetricsNode(metricsNode),
+    ...(secretValues.length > 0 ? { runtimeSecretValues: secretValues } : {}),
   };
 }
 
@@ -280,13 +305,19 @@ export function saveScenario(scenario: SavedScenario) {
   return scenarios;
 }
 
-export function createSavedScenario(nodes: Node<FlowNodeData>[], edges: Edge[], request: StartRequest): SavedScenario {
+export function createSavedScenario(
+  nodes: Node<FlowNodeData>[],
+  edges: Edge[],
+  request: StartRequest,
+  environmentProfileId?: string,
+): SavedScenario {
   const method = request.config.method || "GET";
   const target = persistedTargetName(request.config.url);
   return {
     id: `${Date.now()}`,
     name: `${method} ${target}`,
     savedAtUnixMs: Date.now(),
+    ...(environmentProfileId ? { environmentProfileId } : {}),
     nodes: nodes.map(stripRuntimeNode),
     edges: edges.map(stripRuntimeEdge),
   };
@@ -550,23 +581,55 @@ function isRunnableScenarioNode(node: Node<FlowNodeData> | undefined): node is N
   );
 }
 
-function nodeToScenarioStep(node: Node<FlowNodeData>, authSecrets: Record<string, RuntimeAuthSecret>): ScenarioStep | null {
+function nodeToScenarioStep(
+  node: Node<FlowNodeData>,
+  authSecrets: Record<string, RuntimeAuthSecret>,
+  environmentBindings: Readonly<Record<string, string>>,
+  captureNames: ReadonlySet<string>,
+  runtimeEnvironment: RuntimeEnvironment | undefined,
+): ScenarioStep | null {
   switch (node.data.kind) {
     case "request": {
-      const url = resolveNodeSecrets(node, stringValue(node.data.url, ""), authSecrets);
+      const rawURL = stringValue(node.data.url, "");
+      const displayURL = resolveNodeTemplates(
+        node,
+        rawURL,
+        authSecrets,
+        environmentBindings,
+        captureNames,
+        { ...runtimeEnvironment, resolveSecrets: false },
+      );
+      const url = resolveNodeTemplates(
+        node,
+        rawURL,
+        authSecrets,
+        environmentBindings,
+        captureNames,
+        runtimeEnvironment,
+      );
       const method = stringValue(node.data.method, "GET");
       return {
         id: node.id,
-        name: requestStepName(method, url),
+        name: requestStepName(method, displayURL),
         kind: "request",
         url,
         method,
-        headers: parseHeaderText(resolveNodeSecrets(
+        headers: parseHeaderText(resolveNodeTemplates(
           node,
           headerTextFromNode(node.data, authSecrets[node.id]),
           authSecrets,
+          environmentBindings,
+          captureNames,
+          runtimeEnvironment,
         )),
-        body: resolveNodeSecrets(node, stringValue(node.data.body, ""), authSecrets),
+        body: resolveNodeTemplates(
+          node,
+          stringValue(node.data.body, ""),
+          authSecrets,
+          environmentBindings,
+          captureNames,
+          runtimeEnvironment,
+        ),
         captures: parseCaptureText(stringValue(node.data.capturesText, "")),
       };
     }
@@ -578,11 +641,22 @@ function nodeToScenarioStep(node: Node<FlowNodeData>, authSecrets: Record<string
         delayMs: numberValue(node.data.delayMs, 0),
       };
     case "assertion":
+      const assertion = assertionFromNode(node.data);
+      if (assertion.expected !== undefined) {
+        assertion.expected = resolveNodeTemplates(
+          node,
+          assertion.expected,
+          authSecrets,
+          environmentBindings,
+          captureNames,
+          runtimeEnvironment,
+        );
+      }
       return {
         id: node.id,
         name: assertionStepName(node.data),
         kind: "assert",
-        assertion: assertionFromNode(node.data),
+        assertion,
       };
     default:
       return null;
@@ -833,21 +907,75 @@ function stripSecretFields(data: FlowNodeData): FlowNodeData {
 }
 
 function sanitizeSavedScenario(scenario: SavedScenario): SavedScenario {
+  const environmentProfileId = typeof scenario.environmentProfileId === "string"
+    ? scenario.environmentProfileId.trim()
+    : "";
   return {
     id: scenario.id,
     name: sanitizeSensitiveURL(scenario.name),
     savedAtUnixMs: scenario.savedAtUnixMs,
+    ...(environmentProfileId ? { environmentProfileId } : {}),
     nodes: scenario.nodes.map(stripRuntimeNode),
     edges: scenario.edges.map(stripRuntimeEdge),
   };
 }
 
-function resolveNodeSecrets(
+function resolveNodeTemplates(
   node: Node<FlowNodeData>,
   value: string,
   authSecrets: Record<string, RuntimeAuthSecret>,
+  environmentBindings: Readonly<Record<string, string>>,
+  captureNames: ReadonlySet<string>,
+  runtimeEnvironment: RuntimeEnvironment | undefined,
 ) {
-  return resolveSecretPlaceholders(value, authSecrets[node.id]?.bindings);
+  const resolvedEnvironment = resolveEnvironmentPlaceholders(value, environmentBindings, captureNames);
+  if (runtimeEnvironment?.resolveSecrets === false) {
+    return resolvedEnvironment;
+  }
+  return resolveSecretPlaceholders(resolvedEnvironment, {
+    ...runtimeEnvironment?.secretBindings,
+    ...authSecrets[node.id]?.bindings,
+  });
+}
+
+function scenarioCaptureNames(
+  compiled: CompiledScenarioGraph,
+  nodesById: ReadonlyMap<string, Node<FlowNodeData>>,
+) {
+  return new Set(compiled.path.flatMap((id) => {
+    const node = nodesById.get(id);
+    return node?.data.kind === "request"
+      ? parseCaptureText(stringValue(node.data.capturesText, "")).map((capture) => capture.name)
+      : [];
+  }));
+}
+
+function collectRuntimeSecretValues(
+  authSecrets: Readonly<Record<string, RuntimeAuthSecret>>,
+  runtimeEnvironment: RuntimeEnvironment | undefined,
+) {
+  if (runtimeEnvironment?.resolveSecrets === false) {
+    return [];
+  }
+  const values = new Set<string>();
+  for (const value of Object.values(runtimeEnvironment?.secretBindings ?? {})) {
+    if (value) {
+      values.add(value);
+    }
+  }
+  for (const secret of Object.values(authSecrets)) {
+    for (const value of [
+      secret.token,
+      secret.cookieValue,
+      secret.apiKeyValue,
+      ...Object.values(secret.bindings ?? {}),
+    ]) {
+      if (value) {
+        values.add(value);
+      }
+    }
+  }
+  return Array.from(values).sort((left, right) => right.length - left.length);
 }
 
 function stripRuntimeEdge(edge: Edge): Edge {
@@ -868,6 +996,7 @@ function isSavedScenario(value: unknown): value is SavedScenario {
   return typeof candidate.id === "string" &&
     typeof candidate.name === "string" &&
     typeof candidate.savedAtUnixMs === "number" &&
+    (candidate.environmentProfileId === undefined || typeof candidate.environmentProfileId === "string") &&
     Array.isArray(candidate.nodes) &&
     Array.isArray(candidate.edges);
 }

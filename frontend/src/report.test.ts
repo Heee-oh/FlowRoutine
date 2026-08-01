@@ -248,6 +248,43 @@ describe("buildRunReport", () => {
     expect(buildRunReport(otherSecrets, reportMetrics([])).baseline.key).toBe(report.baseline.key);
   });
 
+  it("redacts explicitly bound runtime secrets even in otherwise non-sensitive fields", () => {
+    const request = createRequest();
+    request.runtimeSecretValues = ["opaque-runtime-value"];
+    request.config.url = "https://example.com/opaque-runtime-value";
+    request.config.headers = [{ name: "X-Custom", value: "opaque-runtime-value" }];
+    request.config.scenarioSteps = [
+      {
+        kind: "request",
+        name: "GET /opaque-runtime-value",
+        url: "https://example.com/opaque-runtime-value",
+        headers: [{ name: "X-Custom", value: "opaque-runtime-value" }],
+      },
+      {
+        kind: "assert",
+        assertion: {
+          type: "header",
+          operator: "equals",
+          headerName: "X-Custom",
+          expected: "opaque-runtime-value",
+        },
+      },
+    ];
+    const other = structuredClone(request);
+    other.runtimeSecretValues = ["different-runtime-value"];
+    other.config.url = "https://example.com/different-runtime-value";
+    other.config.scenarioSteps[0].url = other.config.url;
+    other.config.scenarioSteps[1].assertion!.expected = "different-runtime-value";
+
+    const report = buildRunReport(request, reportMetrics([]));
+    const serialized = JSON.stringify(report);
+
+    expect(serialized).not.toContain("opaque-runtime-value");
+    expect(report.config.headers[0].value).toBe("<redacted>");
+    expect(report.config.scenarioSteps[1].assertion?.expected).toBe("<redacted>");
+    expect(buildRunReport(other, reportMetrics([])).baseline.key).toBe(report.baseline.key);
+  });
+
   it("purges legacy baselines that may contain raw signed URLs", () => {
     const removeItem = vi.fn();
     vi.stubGlobal("window", { localStorage: { removeItem } });
