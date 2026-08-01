@@ -14,6 +14,7 @@ import { HelpDialog, OpenAPIImportDialog, StartConfirmDialog } from "./component
 import { MetricGrid, MetricsChart } from "./components/Metrics";
 import { NodeInspector } from "./components/NodeInspector";
 import { NodePalette } from "./components/NodePalette";
+import { ScenarioPath } from "./components/ScenarioPath";
 import {
   assessStartSafety,
   buildStartRequestFromGraph,
@@ -30,6 +31,7 @@ import {
   saveScenario,
 } from "./flowModel";
 import type { FlowNodeData, FlowNodeKind, RuntimeAuthSecret, SafetyAssessment, SavedScenario } from "./flowTypes";
+import { validateScenarioGraph } from "./graphCompiler";
 import { parseHarArchive } from "./harImport";
 import type { HelpLanguage, HelpTopic } from "./help";
 import { downloadK6Script } from "./k6Export";
@@ -81,9 +83,35 @@ export function App() {
     () => flowNodes.find((node) => node.id === selectedNodeId) ?? null,
     [flowNodes, selectedNodeId],
   );
-  const activeMetricWindowMs = useMemo(
-    () => getMetricWindowMs(flowNodes, flowEdges) || DEFAULT_METRIC_WINDOW_MS,
+  const graphValidation = useMemo(
+    () => validateScenarioGraph(flowNodes, flowEdges),
     [flowEdges, flowNodes],
+  );
+  const canvasNodes = useMemo(() => {
+    const errorsByNode = new Map<string, string[]>();
+    for (const issue of graphValidation.issues) {
+      if (!issue.nodeId) {
+        continue;
+      }
+      const messages = errorsByNode.get(issue.nodeId) ?? [];
+      messages.push(issue.message);
+      errorsByNode.set(issue.nodeId, messages);
+    }
+    const orderByNode = new Map(
+      graphValidation.compiled?.path.map((id, index) => [id, index] as const) ?? [],
+    );
+    return flowNodes.map((node) => ({
+      ...node,
+      data: {
+        ...node.data,
+        validationError: errorsByNode.get(node.id)?.join(" "),
+        executionOrder: orderByNode.get(node.id),
+      },
+    }));
+  }, [flowNodes, graphValidation]);
+  const activeMetricWindowMs = useMemo(
+    () => getMetricWindowMs(flowNodes, graphValidation.compiled) || DEFAULT_METRIC_WINDOW_MS,
+    [flowNodes, graphValidation.compiled],
   );
 
   useEffect(() => {
@@ -186,6 +214,17 @@ export function App() {
     }));
   }, [selectedNodeId, setFlowNodes]);
 
+  const assertGraphValid = useCallback(() => {
+    if (graphValidation.compiled) {
+      return;
+    }
+    const issue = graphValidation.issues[0];
+    if (issue?.nodeId) {
+      setSelectedNodeId(issue.nodeId);
+    }
+    throw new Error(issue?.message ?? "Scenario graph is invalid");
+  }, [graphValidation]);
+
   const executeStart = useCallback(async (request: StartRequest) => {
     try {
       setError("");
@@ -204,7 +243,13 @@ export function App() {
   const handleStart = useCallback(async () => {
     try {
       setError("");
-      const requested = buildStartRequestFromGraph(flowNodes, flowEdges, buildStartRequest(), authSecrets);
+      assertGraphValid();
+      const requested = buildStartRequestFromGraph(
+        flowNodes,
+        flowEdges,
+        buildStartRequest(),
+        authSecrets,
+      );
       const preflight = await preflightLoad(requested);
       const request: StartRequest = {
         ...requested,
@@ -229,7 +274,7 @@ export function App() {
       setStopping(false);
       setError(err instanceof Error ? err.message : "Failed to start load test");
     }
-  }, [authSecrets, buildStartRequest, executeStart, flowEdges, flowNodes, setError, setRunning, setStopping]);
+  }, [assertGraphValid, authSecrets, buildStartRequest, executeStart, flowEdges, flowNodes, setError, setRunning, setStopping]);
 
   const handleStop = useCallback(async () => {
     if (stopping) {
@@ -249,12 +294,18 @@ export function App() {
   const handleExportK6 = useCallback(() => {
     try {
       setError("");
-      const request = buildStartRequestFromGraph(flowNodes, flowEdges, buildStartRequest(), authSecrets);
+      assertGraphValid();
+      const request = buildStartRequestFromGraph(
+        flowNodes,
+        flowEdges,
+        buildStartRequest(),
+        authSecrets,
+      );
       downloadK6Script(request);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to export k6 script");
     }
-  }, [authSecrets, buildStartRequest, flowEdges, flowNodes, setError]);
+  }, [assertGraphValid, authSecrets, buildStartRequest, flowEdges, flowNodes, setError]);
 
   const handleConfirmStart = useCallback(() => {
     if (!pendingStart) {
@@ -453,8 +504,10 @@ export function App() {
           onImportPostman={handleImportPostmanFile}
         />
 
+        <ScenarioPath nodes={flowNodes} validation={graphValidation} />
+
         <FlowCanvas
-          nodes={flowNodes}
+          nodes={canvasNodes}
           edges={flowEdges}
           onNodesChange={handleNodeChanges}
           onEdgesChange={onFlowEdgesChange}
