@@ -1,8 +1,18 @@
 import { create } from "zustand";
 import { applyBaselineComparison, buildRunReport, type RunReport } from "./report";
+import {
+  BoundedMetricHistory,
+  MAX_LIVE_METRIC_POINTS,
+  MAX_REPORT_TIMELINE_POINTS,
+  metricHistoryPoint,
+  type MetricHistoryPoint,
+} from "./metricHistory";
 import type { FlowSettings, Header, MetricsBatch, StartRequest } from "./types";
 
 export const DEFAULT_METRIC_WINDOW_MS = 60_000;
+export const DEFAULT_METRIC_BATCH_INTERVAL_MS = 150;
+export const MIN_METRIC_BATCH_INTERVAL_MS = 100;
+export const MAX_METRIC_BATCH_INTERVAL_MS = 5_000;
 
 const defaultSettings: FlowSettings = {
   url: "http://127.0.0.1:8080",
@@ -12,7 +22,7 @@ const defaultSettings: FlowSettings = {
   virtualUsers: 128,
   durationMs: 10_000,
   requestTimeoutMs: 1_000,
-  batchIntervalMs: 150,
+  batchIntervalMs: DEFAULT_METRIC_BATCH_INTERVAL_MS,
   maxConnsPerHost: 10_000,
   readBufferSize: 4_096,
   writeBufferSize: 4_096,
@@ -35,7 +45,7 @@ type LoadState = {
 };
 
 type MetricsState = {
-  points: MetricsBatch[];
+  points: MetricHistoryPoint[];
   latest: MetricsBatch | null;
   latestReport: RunReport | null;
   metricWindowMs: number;
@@ -44,7 +54,9 @@ type MetricsState = {
   setMetricWindowMs: (metricWindowMs: number) => void;
   reset: () => void;
   activeRequest: StartRequest | null;
-  runPoints: MetricsBatch[];
+  liveHistory: BoundedMetricHistory;
+  reportHistory: BoundedMetricHistory | null;
+  runBatchCount: number;
 };
 
 export const useLoadStore = create<LoadState>((set, get) => ({
@@ -93,35 +105,75 @@ export const useMetricsStore = create<MetricsState>((set) => ({
   latestReport: null,
   metricWindowMs: DEFAULT_METRIC_WINDOW_MS,
   activeRequest: null,
-  runPoints: [],
-  beginRun: (request) => set({ points: [], latest: null, latestReport: null, activeRequest: request, runPoints: [] }),
+  liveHistory: new BoundedMetricHistory(DEFAULT_METRIC_WINDOW_MS, MAX_LIVE_METRIC_POINTS),
+  reportHistory: null,
+  runBatchCount: 0,
+  beginRun: (request) => set((state) => ({
+    points: [],
+    latest: null,
+    latestReport: null,
+    activeRequest: request,
+    liveHistory: new BoundedMetricHistory(state.metricWindowMs, MAX_LIVE_METRIC_POINTS),
+    reportHistory: new BoundedMetricHistory(request.config.durationMs, MAX_REPORT_TIMELINE_POINTS),
+    runBatchCount: 0,
+  })),
   pushBatch: (batch) =>
     set((state) => {
       const cutoff = batch.timestampUnixMs - state.metricWindowMs;
-      const runPoints = state.activeRequest ? state.runPoints.concat(batch) : state.runPoints;
-      const completedReport = state.activeRequest && !batch.running
-        ? applyBaselineComparison(buildRunReport(state.activeRequest, runPoints), state.activeRequest)
-        : null;
+      const point = metricHistoryPoint(batch);
+      state.liveHistory.add(point, cutoff);
+      let reportHistory = state.reportHistory;
+      let runBatchCount = state.runBatchCount;
+      let completedReport: RunReport | null = null;
+      if (state.activeRequest) {
+        reportHistory ??= new BoundedMetricHistory(
+          state.activeRequest.config.durationMs,
+          MAX_REPORT_TIMELINE_POINTS,
+        );
+        reportHistory.add(point);
+        runBatchCount += 1;
+        if (!batch.running) {
+          completedReport = applyBaselineComparison(buildRunReport(state.activeRequest, {
+            finalBatch: batch,
+            timeline: reportHistory.values(),
+            batchCount: runBatchCount,
+          }), state.activeRequest);
+        }
+      }
       return {
         latest: batch,
-        points: state.points.concat(batch).filter((point) => point.timestampUnixMs >= cutoff),
-        runPoints,
+        points: state.liveHistory.values(cutoff),
         latestReport: completedReport ?? state.latestReport,
         activeRequest: completedReport ? null : state.activeRequest,
+        reportHistory: completedReport ? null : reportHistory,
+        runBatchCount: completedReport ? 0 : runBatchCount,
       };
     }),
   setMetricWindowMs: (metricWindowMs) =>
     set((state) => {
       const nextMetricWindowMs = Math.max(1_000, Math.floor(metricWindowMs));
       const latestTimestamp = state.latest?.timestampUnixMs;
+      const liveHistory = new BoundedMetricHistory(nextMetricWindowMs, MAX_LIVE_METRIC_POINTS);
+      const cutoff = latestTimestamp === undefined
+        ? Number.NEGATIVE_INFINITY
+        : latestTimestamp - nextMetricWindowMs;
+      for (const point of state.points) {
+        liveHistory.add(point, cutoff);
+      }
       return {
         metricWindowMs: nextMetricWindowMs,
-        points: latestTimestamp === undefined
-          ? state.points
-          : state.points.filter((point) => point.timestampUnixMs >= latestTimestamp - nextMetricWindowMs),
+        liveHistory,
+        points: liveHistory.values(cutoff),
       };
     }),
-  reset: () => set({ points: [], latest: null, activeRequest: null, runPoints: [] }),
+  reset: () => set((state) => ({
+    points: [],
+    latest: null,
+    activeRequest: null,
+    liveHistory: new BoundedMetricHistory(state.metricWindowMs, MAX_LIVE_METRIC_POINTS),
+    reportHistory: null,
+    runBatchCount: 0,
+  })),
 }));
 
 function parseHeaders(raw: string): Header[] {

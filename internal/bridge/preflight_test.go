@@ -50,6 +50,19 @@ func TestPreflightNormalizesDefaultsAndEstimatesResources(t *testing.T) {
 	}
 }
 
+func TestPreflightAllowsSlowMetricBatches(t *testing.T) {
+	request := validPreflightRequest()
+	request.BatchIntervalMS = 1_000
+
+	preflight, err := preflightStartRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflight.EffectiveBatchIntervalMS != 1_000 {
+		t.Fatalf("got batch interval %d, want 1000", preflight.EffectiveBatchIntervalMS)
+	}
+}
+
 func TestPreflightReturnsActionablePressureWarnings(t *testing.T) {
 	request := validPreflightRequest()
 	request.Config.VirtualUsers = WarningConnections

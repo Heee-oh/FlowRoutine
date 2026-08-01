@@ -1,6 +1,6 @@
 import type { Edge, Node } from "@xyflow/react";
 import { normalizeCaptureDefinition, normalizeCaptureScope } from "./captureValidation";
-import { DEFAULT_METRIC_WINDOW_MS } from "./store";
+import { DEFAULT_METRIC_BATCH_INTERVAL_MS, DEFAULT_METRIC_WINDOW_MS } from "./store";
 import { formatDuration } from "./format";
 import {
   resolveSecretPlaceholders,
@@ -189,7 +189,7 @@ export function refreshNodeDisplay(node: Node<FlowNodeData>): Node<FlowNodeData>
       break;
     case "metrics":
       data.value = gateCaption(data);
-      data.caption = `${numberValue(data.batchIntervalMs, 150)}ms updates`;
+      data.caption = `${numberValue(data.batchIntervalMs, DEFAULT_METRIC_BATCH_INTERVAL_MS)}ms updates`;
       break;
     case "window":
       data.value = `${formatDuration(numberValue(data.windowMs, DEFAULT_METRIC_WINDOW_MS))} retained`;

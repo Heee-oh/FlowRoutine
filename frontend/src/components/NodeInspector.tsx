@@ -1,7 +1,12 @@
 import { memo, type ReactNode } from "react";
 import type { Node } from "@xyflow/react";
 import { HelpCircle, Plus, Trash2 } from "lucide-react";
-import { DEFAULT_METRIC_WINDOW_MS } from "../store";
+import {
+  DEFAULT_METRIC_BATCH_INTERVAL_MS,
+  DEFAULT_METRIC_WINDOW_MS,
+  MAX_METRIC_BATCH_INTERVAL_MS,
+  MIN_METRIC_BATCH_INTERVAL_MS,
+} from "../store";
 import type { HelpTopic } from "../help";
 import type { FlowNodeData, HeaderInputMode, HeaderRow, RuntimeAuthSecret, SavedScenario } from "../flowTypes";
 import {
@@ -294,8 +299,16 @@ const NodeFields = memo(function NodeFields({
       return (
         <>
           <Field label="Batch ms">
-            <NumberInput value={node.data.batchIntervalMs ?? 150} min={100} max={200} onChange={(value) => updateNode({ batchIntervalMs: value })} />
+            <NumberInput
+              value={node.data.batchIntervalMs ?? DEFAULT_METRIC_BATCH_INTERVAL_MS}
+              min={MIN_METRIC_BATCH_INTERVAL_MS}
+              max={MAX_METRIC_BATCH_INTERVAL_MS}
+              onChange={(value) => updateNode({ batchIntervalMs: value })}
+            />
           </Field>
+          <div className="inspector-note">
+            Use slower updates for long runs; summaries remain cumulative and exact.
+          </div>
           <Field label="Latency sample rate">
             <NumberInput value={node.data.latencySampleRate ?? 1} min={1} max={1_000_000} onChange={(value) => updateNode({ latencySampleRate: value })} />
           </Field>
