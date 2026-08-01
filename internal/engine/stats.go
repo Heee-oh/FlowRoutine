@@ -8,41 +8,19 @@ import (
 )
 
 const (
-	LatencyBucketCount      = 25
-	HTTPStatusCount         = 600
-	maxStatsShards          = 256
-	statsShardsPerProcessor = 4
-	firstTrackedHTTPStatus  = 100
-	trackedHTTPStatusCount  = HTTPStatusCount - firstTrackedHTTPStatus
+	LatencyBucketCount                 = 1024
+	LatencyHistogramMinNano            = uint64(time.Microsecond)
+	LatencyHistogramMaxNano            = uint64(5 * time.Minute)
+	LatencyHistogramRelativeErrorBound = 0.02
+	HTTPStatusCount                    = 600
+	maxStatsShards                     = 256
+	statsShardsPerProcessor            = 4
+	firstTrackedHTTPStatus             = 100
+	trackedHTTPStatusCount             = HTTPStatusCount - firstTrackedHTTPStatus
+	latencyHistogramFiniteBucketCount  = LatencyBucketCount - 1
 )
 
-var latencyBucketUpperBoundsNano = [LatencyBucketCount]uint64{
-	uint64(time.Microsecond),
-	uint64(2 * time.Microsecond),
-	uint64(5 * time.Microsecond),
-	uint64(10 * time.Microsecond),
-	uint64(20 * time.Microsecond),
-	uint64(50 * time.Microsecond),
-	uint64(100 * time.Microsecond),
-	uint64(200 * time.Microsecond),
-	uint64(500 * time.Microsecond),
-	uint64(time.Millisecond),
-	uint64(2 * time.Millisecond),
-	uint64(5 * time.Millisecond),
-	uint64(10 * time.Millisecond),
-	uint64(20 * time.Millisecond),
-	uint64(50 * time.Millisecond),
-	uint64(100 * time.Millisecond),
-	uint64(200 * time.Millisecond),
-	uint64(500 * time.Millisecond),
-	uint64(time.Second),
-	uint64(2 * time.Second),
-	uint64(5 * time.Second),
-	uint64(10 * time.Second),
-	uint64(30 * time.Second),
-	uint64(60 * time.Second),
-	math.MaxUint64,
-}
+var latencyBucketUpperBoundsNano = buildLatencyBucketUpperBounds()
 
 type AtomicStats struct {
 	startedAtUnixNano atomic.Int64
@@ -222,13 +200,13 @@ func (s *AtomicStats) Snapshot(now time.Time) Snapshot {
 	if snapshot.MinLatencyNano == math.MaxUint64 {
 		snapshot.MinLatencyNano = 0
 	}
-	snapshot.P95LatencyNano = PercentileLatencyNano(snapshot.LatencyBuckets, snapshot.LatencySamples, 0.95)
-	snapshot.P99LatencyNano = PercentileLatencyNano(snapshot.LatencyBuckets, snapshot.LatencySamples, 0.99)
-	snapshot.P999LatencyNano = PercentileLatencyNano(snapshot.LatencyBuckets, snapshot.LatencySamples, 0.999)
+	snapshot.P95LatencyNano = PercentileLatencyNano(&snapshot.LatencyBuckets, snapshot.LatencySamples, 0.95)
+	snapshot.P99LatencyNano = PercentileLatencyNano(&snapshot.LatencyBuckets, snapshot.LatencySamples, 0.99)
+	snapshot.P999LatencyNano = PercentileLatencyNano(&snapshot.LatencyBuckets, snapshot.LatencySamples, 0.999)
 	return snapshot
 }
 
-func PercentileLatencyNano(buckets [LatencyBucketCount]uint64, samples uint64, percentile float64) uint64 {
+func PercentileLatencyNano(buckets *[LatencyBucketCount]uint64, samples uint64, percentile float64) uint64 {
 	if samples == 0 {
 		return 0
 	}
@@ -370,12 +348,38 @@ func (s *statsShard) RecordTemplateFailure() {
 }
 
 func latencyBucketIndex(latencyNano uint64) int {
-	for i, upperBound := range latencyBucketUpperBoundsNano {
-		if latencyNano <= upperBound {
-			return i
+	low, high := 0, LatencyBucketCount
+	for low < high {
+		middle := int(uint(low+high) >> 1)
+		if latencyNano <= latencyBucketUpperBoundsNano[middle] {
+			high = middle
+		} else {
+			low = middle + 1
 		}
 	}
-	return LatencyBucketCount - 1
+	if low == LatencyBucketCount {
+		return LatencyBucketCount - 1
+	}
+	return low
+}
+
+func buildLatencyBucketUpperBounds() [LatencyBucketCount]uint64 {
+	var bounds [LatencyBucketCount]uint64
+	bounds[0] = LatencyHistogramMinNano
+	ratio := math.Pow(
+		float64(LatencyHistogramMaxNano)/float64(LatencyHistogramMinNano),
+		1/float64(latencyHistogramFiniteBucketCount-1),
+	)
+	for index := 1; index < latencyHistogramFiniteBucketCount-1; index++ {
+		next := uint64(math.Ceil(float64(LatencyHistogramMinNano) * math.Pow(ratio, float64(index))))
+		if next <= bounds[index-1] {
+			next = bounds[index-1] + 1
+		}
+		bounds[index] = next
+	}
+	bounds[latencyHistogramFiniteBucketCount-1] = LatencyHistogramMaxNano
+	bounds[LatencyBucketCount-1] = math.MaxUint64
+	return bounds
 }
 
 func (s *statsShard) recordMinLatency(next uint64) {

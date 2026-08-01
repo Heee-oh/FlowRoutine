@@ -109,6 +109,9 @@ func TestBuildMetricsBatchUsesSnapshotDelta(t *testing.T) {
 	if batch.AssertionsFailed != 7 || batch.CaptureFailures != 2 || batch.TemplateFailures != 3 {
 		t.Fatalf("unexpected assertion breakdown: %+v", batch)
 	}
+	if batch.LatencyPercentileErrorBoundPct != engine.LatencyHistogramRelativeErrorBound*100 {
+		t.Fatalf("unexpected latency percentile error bound: %f", batch.LatencyPercentileErrorBoundPct)
+	}
 	if len(batch.StatusCodes) != 3 ||
 		batch.StatusCodes[0] != (StatusCodeCount{Code: 200, Count: 20}) ||
 		batch.StatusCodes[1] != (StatusCodeCount{Code: 401, Count: 2}) ||
@@ -120,32 +123,33 @@ func TestBuildMetricsBatchUsesSnapshotDelta(t *testing.T) {
 func TestBuildMetricsBatchSeparatesIntervalAndRunLatency(t *testing.T) {
 	previousAt := time.Unix(10, 0)
 	currentAt := previousAt.Add(time.Second)
-	previousBuckets := latencyBucketsSnapshot(map[int]uint64{18: 90})
-	currentBuckets := latencyBucketsSnapshot(map[int]uint64{9: 10, 18: 90})
+	var stats engine.AtomicStats
+	stats.Init(1)
+	stats.Reset(previousAt)
+	for range 90 {
+		stats.RecordSuccess(time.Second, 0, 0)
+	}
+	previous := stats.Snapshot(previousAt)
+	for range 10 {
+		stats.RecordSuccess(time.Millisecond, 0, 0)
+	}
+	current := stats.Snapshot(currentAt)
 
 	batch := buildMetricsBatch(
-		engine.Snapshot{
-			At:               previousAt,
-			LatencySamples:   90,
-			TotalLatencyNano: uint64(90 * time.Second),
-			LatencyBuckets:   previousBuckets,
-		},
-		engine.Snapshot{
-			At:               currentAt,
-			LatencySamples:   100,
-			TotalLatencyNano: uint64(90*time.Second + 10*time.Millisecond),
-			MinLatencyNano:   uint64(time.Millisecond),
-			MaxLatencyNano:   uint64(time.Second),
-			LatencyBuckets:   currentBuckets,
-		},
+		previous,
+		current,
 		false,
 		currentAt,
 	)
 
-	if batch.IntervalLatency.Samples != 10 || batch.IntervalLatency.P95Ms != 1 {
+	if batch.IntervalLatency.Samples != 10 ||
+		batch.IntervalLatency.P95Ms < 1 ||
+		batch.IntervalLatency.P95Ms >= 1.02 {
 		t.Fatalf("unexpected interval latency: %+v", batch.IntervalLatency)
 	}
-	if batch.RunLatency.Samples != 100 || batch.RunLatency.P95Ms != 1000 {
+	if batch.RunLatency.Samples != 100 ||
+		batch.RunLatency.P95Ms < 1000 ||
+		batch.RunLatency.P95Ms >= 1020 {
 		t.Fatalf("unexpected run latency: %+v", batch.RunLatency)
 	}
 	if math.Abs(batch.RunLatency.AvgMs-900.1) > 0.0001 {
@@ -159,14 +163,6 @@ func statusCodesSnapshot(values map[int]uint64) [engine.HTTPStatusCount]uint64 {
 		statusCodes[code] = count
 	}
 	return statusCodes
-}
-
-func latencyBucketsSnapshot(values map[int]uint64) [engine.LatencyBucketCount]uint64 {
-	var buckets [engine.LatencyBucketCount]uint64
-	for bucket, count := range values {
-		buckets[bucket] = count
-	}
-	return buckets
 }
 
 func TestBatcherEmitsOnTick(t *testing.T) {

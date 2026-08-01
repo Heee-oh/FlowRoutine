@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
-import { Activity, CheckCircle2, Download, Gauge, ListChecks, MinusCircle, Network, Timer, TrendingDown, TrendingUp, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Download, Gauge, ListChecks, MinusCircle, Network, Timer, TrendingDown, TrendingUp, XCircle } from "lucide-react";
 import { downloadRunReport, type BaselineComparison, type QualityGateResult } from "../report";
 import { useMetricsStore } from "../store";
 import type { MetricHistoryPoint } from "../metricHistory";
@@ -34,17 +34,22 @@ export const MetricGrid = memo(function MetricGrid() {
           value={formatNumber(latest?.assertionsFailed ?? 0)}
           title={`Capture ${formatNumber(latest?.captureFailures ?? 0)} · Template ${formatNumber(latest?.templateFailures ?? 0)}`}
         />
+        <MetricDetail
+          label="Samples"
+          value={formatNumber(latest?.runLatency.samples ?? 0)}
+          title={latencySamplingTitle(latest)}
+        />
         <MetricDetail label="Read" value={formatBytes(latest?.bytesRead ?? 0)} />
       </div>
       <div className="metrics-footer">
         <div className="metrics-footer-badges">
           {latestReport ? (
             <div
-              className={`quality-gate ${latestReport.qualityGate.passed ? "quality-gate-pass" : "quality-gate-fail"}`}
+              className={`quality-gate quality-gate-${latestReport.qualityGate.status}`}
               title={qualityGateTitle(latestReport.qualityGate)}
             >
-              {latestReport.qualityGate.passed ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-              {latestReport.qualityGate.passed ? "SLO Passed" : "SLO Failed"}
+              {qualityGateIcon(latestReport.qualityGate.status)}
+              {qualityGateLabel(latestReport.qualityGate.status)}
             </div>
           ) : null}
           {latestReport ? (
@@ -204,8 +209,38 @@ function qualityGateTitle(gate: QualityGateResult) {
     return "No SLO gates configured";
   }
   return gate.checks
-    .map((check) => `${check.name}: ${formatNumber(check.actual, 2)} ${check.operator} ${formatNumber(check.threshold, 2)}`)
+    .map((check) => check.status === "insufficient"
+      ? `${check.name}: ${formatNumber(check.samples ?? 0)} / ${formatNumber(check.minimumSamples ?? 0)} samples`
+      : `${check.name}: ${formatNumber(check.actual, 2)} ${check.operator} ${formatNumber(check.threshold, 2)}`)
     .join("\n");
+}
+
+function qualityGateIcon(status: QualityGateResult["status"]) {
+  if (status === "pass") {
+    return <CheckCircle2 size={14} />;
+  }
+  if (status === "fail") {
+    return <XCircle size={14} />;
+  }
+  return <AlertTriangle size={14} />;
+}
+
+function qualityGateLabel(status: QualityGateResult["status"]) {
+  if (status === "pass") {
+    return "SLO Passed";
+  }
+  if (status === "fail") {
+    return "SLO Failed";
+  }
+  return "SLO Needs samples";
+}
+
+function latencySamplingTitle(batch: MetricsBatch | null) {
+  if (!batch || batch.total === 0) {
+    return "No latency samples yet";
+  }
+  const effectiveRate = (batch.runLatency.samples / batch.total) * 100;
+  return `${formatNumber(effectiveRate, 2)}% sampled · percentile error < ${formatNumber(batch.latencyPercentileErrorBoundPct, 1)}%`;
 }
 
 function baselineLabel(verdict: BaselineComparison["verdict"]) {

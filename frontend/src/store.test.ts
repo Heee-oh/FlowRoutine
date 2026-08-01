@@ -50,6 +50,7 @@ function batch(index: number, running: boolean): MetricsBatch {
     assertionsFailed: 0,
     captureFailures: 0,
     templateFailures: 0,
+    latencyPercentileErrorBoundPct: 2,
     intervalLatency: {
       samples: 1,
       avgMs: 10,

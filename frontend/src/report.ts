@@ -3,7 +3,7 @@ import type { MetricHistoryPoint } from "./metricHistory";
 import { redactHeaders, redactSensitiveURL } from "./secretSanitization";
 
 export type RunReport = {
-  schemaVersion: 4;
+  schemaVersion: 5;
   generatedAtUnixMs: number;
   run: {
     targetUrl: string;
@@ -63,6 +63,8 @@ type ReportSummary = {
   successRate: number;
   failureRate: number;
   latencySamples: number;
+  effectiveLatencySampleRate: number;
+  latencyPercentileErrorBoundPct: number;
   latencyMs: {
     avg: number;
     min: number;
@@ -98,7 +100,8 @@ type ReportTimelinePoint = {
 };
 
 export type QualityGateResult = {
-  passed: boolean;
+  status: "pass" | "fail" | "insufficient";
+  passed: boolean | null;
   checks: QualityGateCheck[];
 };
 
@@ -107,7 +110,10 @@ type QualityGateCheck = {
   actual: number;
   threshold: number;
   operator: "<=" | ">=";
-  passed: boolean;
+  status: "pass" | "fail" | "insufficient";
+  passed: boolean | null;
+  samples?: number;
+  minimumSamples?: number;
 };
 
 export type BaselineComparison = {
@@ -154,7 +160,7 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
   const averageRps = elapsedMs > 0 ? total / (elapsedMs / 1_000) : 0;
 
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     generatedAtUnixMs: Date.now(),
     run: {
       targetUrl: redactSensitiveURL(request.config.url),
@@ -189,6 +195,8 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
       successRate: ratio(finalBatch.success, total),
       failureRate: ratio(finalBatch.failed, total),
       latencySamples: runLatency.samples,
+      effectiveLatencySampleRate: ratio(runLatency.samples, total),
+      latencyPercentileErrorBoundPct: finalBatch.latencyPercentileErrorBoundPct,
       latencyMs: {
         avg: runLatency.avgMs,
         min: runLatency.minMs,
@@ -268,13 +276,39 @@ function evaluateQualityGate(gate: QualityGate, finalBatch: MetricsBatch, averag
   const failureRatePct = finalBatch.total > 0 ? (finalBatch.failed / finalBatch.total) * 100 : 0;
   const checks = [
     upperBoundCheck("failure_rate_pct", failureRatePct, gate.maxFailureRatePct),
-    upperBoundCheck("p95_latency_ms", finalBatch.runLatency.p95Ms, gate.maxP95LatencyMs),
-    upperBoundCheck("p99_latency_ms", finalBatch.runLatency.p99Ms, gate.maxP99LatencyMs),
+    latencyUpperBoundCheck("p95_latency_ms", finalBatch.runLatency.p95Ms, gate.maxP95LatencyMs, finalBatch.runLatency.samples, 20),
+    latencyUpperBoundCheck("p99_latency_ms", finalBatch.runLatency.p99Ms, gate.maxP99LatencyMs, finalBatch.runLatency.samples, 100),
     lowerBoundCheck("average_rps", averageRps, gate.minRps),
   ].filter((check): check is QualityGateCheck => Boolean(check));
+  const status = checks.some((check) => check.status === "fail")
+    ? "fail"
+    : checks.some((check) => check.status === "insufficient")
+      ? "insufficient"
+      : "pass";
   return {
-    passed: checks.every((check) => check.passed),
+    status,
+    passed: status === "insufficient" ? null : status === "pass",
     checks,
+  };
+}
+
+function latencyUpperBoundCheck(
+  name: string,
+  actual: number,
+  threshold: number,
+  samples: number,
+  minimumSamples: number,
+): QualityGateCheck | null {
+  const check = upperBoundCheck(name, actual, threshold);
+  if (!check || samples >= minimumSamples) {
+    return check;
+  }
+  return {
+    ...check,
+    status: "insufficient",
+    passed: null,
+    samples,
+    minimumSamples,
   };
 }
 
@@ -282,12 +316,14 @@ function upperBoundCheck(name: string, actual: number, threshold: number): Quali
   if (threshold <= 0) {
     return null;
   }
+  const passed = actual <= threshold;
   return {
     name,
     actual,
     threshold,
     operator: "<=",
-    passed: actual <= threshold,
+    status: passed ? "pass" : "fail",
+    passed,
   };
 }
 
@@ -295,12 +331,14 @@ function lowerBoundCheck(name: string, actual: number, threshold: number): Quali
   if (threshold <= 0) {
     return null;
   }
+  const passed = actual >= threshold;
   return {
     name,
     actual,
     threshold,
     operator: ">=",
-    passed: actual >= threshold,
+    status: passed ? "pass" : "fail",
+    passed,
   };
 }
 
@@ -537,6 +575,7 @@ function emptyBatch(): MetricsBatch {
     assertionsFailed: 0,
     captureFailures: 0,
     templateFailures: 0,
+    latencyPercentileErrorBoundPct: 2,
     intervalLatency: {
       samples: 0,
       avgMs: 0,

@@ -1,9 +1,11 @@
 package engine
 
 import (
+	"math"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func TestStatsShardCountIsCPUScaledAndBounded(t *testing.T) {
@@ -144,6 +146,76 @@ func TestAtomicStatsSnapshotCostStopsGrowingAboveShardCap(t *testing.T) {
 			"snapshot shard counts differ above cap: 1k=%d maximum=%d",
 			len(thousandVUs.shards),
 			len(maximumVUs.shards),
+		)
+	}
+}
+
+func TestLatencyHistogramBoundsPrecisionAndMemory(t *testing.T) {
+	if latencyBucketUpperBoundsNano[0] != LatencyHistogramMinNano {
+		t.Fatalf("got minimum bound %d, want %d", latencyBucketUpperBoundsNano[0], LatencyHistogramMinNano)
+	}
+	if latencyBucketUpperBoundsNano[LatencyBucketCount-2] != LatencyHistogramMaxNano {
+		t.Fatalf(
+			"got maximum finite bound %d, want %d",
+			latencyBucketUpperBoundsNano[LatencyBucketCount-2],
+			LatencyHistogramMaxNano,
+		)
+	}
+	if latencyBucketUpperBoundsNano[LatencyBucketCount-1] != math.MaxUint64 {
+		t.Fatal("final histogram bucket must capture overflow latencies")
+	}
+
+	for index := 1; index < LatencyBucketCount-1; index++ {
+		lowestValue := latencyBucketUpperBoundsNano[index-1] + 1
+		upperBound := latencyBucketUpperBoundsNano[index]
+		if upperBound <= lowestValue {
+			continue
+		}
+		relativeOverestimate := float64(upperBound-lowestValue) / float64(lowestValue)
+		if relativeOverestimate >= LatencyHistogramRelativeErrorBound {
+			t.Fatalf(
+				"bucket %d relative overestimate %.6f exceeds bound %.6f",
+				index,
+				relativeOverestimate,
+				LatencyHistogramRelativeErrorBound,
+			)
+		}
+	}
+
+	const maxStatsMemoryBytes = 4 << 20
+	statsMemoryBytes := uintptr(maxStatsShards) * unsafe.Sizeof(statsShard{})
+	if statsMemoryBytes > maxStatsMemoryBytes {
+		t.Fatalf("bounded stats storage uses %d bytes, budget is %d", statsMemoryBytes, maxStatsMemoryBytes)
+	}
+}
+
+func TestLatencyHistogramIndexesBoundariesAndBoundsPercentileError(t *testing.T) {
+	if got := latencyBucketIndex(0); got != 0 {
+		t.Fatalf("zero latency bucket = %d, want 0", got)
+	}
+	if got := latencyBucketIndex(LatencyHistogramMinNano); got != 0 {
+		t.Fatalf("minimum latency bucket = %d, want 0", got)
+	}
+	if got := latencyBucketIndex(LatencyHistogramMaxNano); got != LatencyBucketCount-2 {
+		t.Fatalf("maximum latency bucket = %d, want %d", got, LatencyBucketCount-2)
+	}
+	if got := latencyBucketIndex(LatencyHistogramMaxNano + 1); got != LatencyBucketCount-1 {
+		t.Fatalf("overflow latency bucket = %d, want %d", got, LatencyBucketCount-1)
+	}
+
+	const latencyNano = uint64(123_456_789)
+	var buckets [LatencyBucketCount]uint64
+	buckets[latencyBucketIndex(latencyNano)] = 1
+	estimate := PercentileLatencyNano(&buckets, 1, 0.99)
+	if estimate < latencyNano {
+		t.Fatalf("percentile estimate %d is below observed latency %d", estimate, latencyNano)
+	}
+	relativeOverestimate := float64(estimate-latencyNano) / float64(latencyNano)
+	if relativeOverestimate >= LatencyHistogramRelativeErrorBound {
+		t.Fatalf(
+			"relative percentile overestimate %.6f exceeds bound %.6f",
+			relativeOverestimate,
+			LatencyHistogramRelativeErrorBound,
 		)
 	}
 }

@@ -65,9 +65,11 @@ Capture syntax is `name[@iteration|run][:success|any|2xx|200]=JSON.path`. Iterat
 virtual-user loop; run values keep the first successful value for that virtual user. JSON paths support
 dot segments and array indexes such as `$.items[0].token`. A missing value never sends an unresolved template.
 
-Metric summaries use the final cumulative engine snapshot and remain exact. Realtime charts retain at most
-2,048 lightweight points, while exported report timelines retain at most 1,000 points. Streaming downsampling
-preserves the first and last samples plus per-bucket RPS, P95, and P99 minimum and maximum excursions.
+Request, failure, byte, and status-code summaries use the final cumulative engine snapshot and remain exact.
+Latency is sampled deterministically once every configured N requests per worker. Reports disclose total
+requests, latency samples, and the effective sampled fraction. Realtime charts retain at most 2,048 lightweight
+points, while exported report timelines retain at most 1,000 points. Streaming downsampling preserves the first
+and last samples plus per-bucket RPS, P95, and P99 minimum and maximum excursions.
 
 Global request limits use one central pacer per engine run across all scenario steps. Up to 1,000 RPS it keeps
 a single-permit burst and issues one permit every `1 / RPS`; higher rates are emitted in bounded 1ms batches.
@@ -80,8 +82,11 @@ per document, 20 MiB total, 16 documents, 5 redirects, 64 reference levels, 10,0
 resolved nodes; cyclic or unresolved references fail without returning the source document over the bridge.
 
 Engine counters use `min(VUs, 4 × GOMAXPROCS, 256)` stable stripes. Status-code and latency-histogram storage,
-snapshot scans, and reset work therefore stop growing with virtual users after the CPU-scaled stripe cap,
-while counters remain exact and latency percentiles retain the documented histogram precision.
+snapshot scans, and reset work therefore stop growing with virtual users after the CPU-scaled stripe cap.
+The 1,024-bucket latency histogram has at most 1µs absolute overestimation from 0–1µs and less than 2% relative
+overestimation above 1µs through the maximum 5-minute request timeout. P95 and P99 SLO checks are withheld as
+`insufficient` below 20 and 100 latency samples respectively, the minimum samples needed to resolve one
+observation in each percentile tail; this is a rank-resolution guard, not a statistical confidence interval.
 
 Request templates are parsed into literal and variable segments during configuration compilation. Each worker
 reuses one render buffer after warm-up; buffers above 64 KiB are released after the request. Static requests
