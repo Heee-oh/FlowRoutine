@@ -37,6 +37,9 @@ export type FlowNodeData = {
   durationMs?: number;
   requestTimeoutMs?: number;
   maxConnsPerHost?: number;
+  readBufferSize?: number;
+  writeBufferSize?: number;
+  maxResponseBytes?: number;
   rateLimitRps?: number;
   rampUpMs?: number;
   batchIntervalMs?: number;
@@ -68,6 +71,9 @@ export type SafetyAssessment = {
   target: TargetProfile;
   warnings: string[];
   confirmationRequired: boolean;
+  estimatedMemoryBytes: number;
+  estimatedConnections: number;
+  targetHosts: number;
 };
 
 export type SavedScenario = {

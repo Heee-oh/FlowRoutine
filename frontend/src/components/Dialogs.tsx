@@ -4,7 +4,7 @@ import { helpDialogTitle, nodeHelpItems, overviewHelpItems } from "../help";
 import { nodePalette } from "../flowModel";
 import type { SafetyAssessment } from "../flowTypes";
 import type { OpenAPIEndpoint, OpenAPIImportResponse, StartRequest } from "../types";
-import { formatNumber } from "../format";
+import { formatBytes, formatNumber } from "../format";
 
 export const HelpDialog = memo(function HelpDialog({
   topic,
@@ -85,6 +85,9 @@ export const StartConfirmDialog = memo(function StartConfirmDialog({
           <span>{formatNumber(config?.virtualUsers ?? 0)} VUs</span>
           <span>{formatNumber(config?.durationMs ?? 0)} ms</span>
           <span>{(config?.rateLimitRps ?? 0) > 0 ? `${formatNumber(config?.rateLimitRps ?? 0)} RPS cap` : "Unlimited RPS"}</span>
+          {safety.estimatedMemoryBytes > 0 && <span>~{formatBytes(safety.estimatedMemoryBytes)} peak</span>}
+          {safety.estimatedConnections > 0 && <span>Up to {formatNumber(safety.estimatedConnections)} connections</span>}
+          {safety.targetHosts > 1 && <span>{formatNumber(safety.targetHosts)} target hosts</span>}
         </div>
         <div className="modal-actions">
           <button type="button" className="secondary" onClick={onCancel}>Cancel</button>

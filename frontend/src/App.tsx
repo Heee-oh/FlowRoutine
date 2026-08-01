@@ -36,7 +36,7 @@ import { downloadK6Script } from "./k6Export";
 import { parsePostmanCollection } from "./postmanImport";
 import { DEFAULT_METRIC_WINDOW_MS, useLoadStore, useMetricsStore } from "./store";
 import type { OpenAPIEndpoint, OpenAPIImportResponse, StartRequest } from "./types";
-import { importOpenAPI, onMetricsBatch, startLoad, stopLoad } from "./wails";
+import { importOpenAPI, onMetricsBatch, preflightLoad, startLoad, stopLoad } from "./wails";
 
 type ImportedRequest = {
   name: string;
@@ -194,9 +194,18 @@ export function App() {
   const handleStart = useCallback(async () => {
     try {
       setError("");
-      const request = buildStartRequestFromGraph(flowNodes, flowEdges, buildStartRequest(), authSecrets);
+      const requested = buildStartRequestFromGraph(flowNodes, flowEdges, buildStartRequest(), authSecrets);
+      const preflight = await preflightLoad(requested);
+      const request: StartRequest = {
+        ...requested,
+        config: {
+          ...requested.config,
+          ...preflight.effectiveConfig,
+        },
+        batchIntervalMs: preflight.effectiveBatchIntervalMs,
+      };
       const scenario = createSavedScenario(flowNodes, flowEdges, request);
-      const assessment = assessStartSafety(request.config);
+      const assessment = assessStartSafety(request.config, preflight);
       if (assessment.confirmationRequired) {
         setPendingStart(request);
         setPendingSafety(assessment);

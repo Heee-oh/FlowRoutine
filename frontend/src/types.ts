@@ -43,6 +43,43 @@ export type StartRequest = {
   qualityGate?: QualityGate;
 };
 
+export type StartResponse = {
+  started: boolean;
+  preflight: PreflightResponse;
+};
+
+export type PreflightResponse = {
+  effectiveConfig: EffectiveLoadConfig;
+  effectiveBatchIntervalMs: number;
+  estimate: PreflightEstimate;
+  warnings: PreflightWarning[];
+};
+
+export type EffectiveLoadConfig = Pick<
+  LoadConfig,
+  | "virtualUsers"
+  | "durationMs"
+  | "requestTimeoutMs"
+  | "maxConnsPerHost"
+  | "readBufferSize"
+  | "writeBufferSize"
+  | "maxResponseBytes"
+  | "latencySampleRate"
+  | "rateLimitRps"
+  | "rampUpMs"
+>;
+
+export type PreflightEstimate = {
+  memoryBytes: number;
+  connections: number;
+  targetHosts: number;
+};
+
+export type PreflightWarning = {
+  code: string;
+  message: string;
+};
+
 export type QualityGate = {
   maxFailureRatePct: number;
   maxP95LatencyMs: number;
@@ -135,7 +172,8 @@ declare global {
     go?: {
       main?: {
         App?: {
-          StartLoad?: (request: StartRequest) => Promise<unknown>;
+          StartLoad?: (request: StartRequest) => Promise<StartResponse>;
+          PreflightLoad?: (request: StartRequest) => Promise<PreflightResponse>;
           StopLoad?: () => Promise<void>;
           ImportOpenAPI?: (url: string) => Promise<OpenAPIImportResponse>;
         };
@@ -157,6 +195,9 @@ export type FlowSettings = {
   requestTimeoutMs: number;
   batchIntervalMs: number;
   maxConnsPerHost: number;
+  readBufferSize: number;
+  writeBufferSize: number;
+  maxResponseBytes: number;
   latencySampleRate: number;
   rateLimitRps: number;
   rampUpMs: number;

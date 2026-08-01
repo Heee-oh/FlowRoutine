@@ -1,7 +1,7 @@
 import type { Edge, Node } from "@xyflow/react";
 import { DEFAULT_METRIC_WINDOW_MS } from "./store";
 import { formatDuration } from "./format";
-import type { Capture, Header, LoadConfig, OpenAPIEndpoint, ScenarioStep, StartRequest } from "./types";
+import type { Capture, Header, LoadConfig, OpenAPIEndpoint, PreflightResponse, ScenarioStep, StartRequest } from "./types";
 import type {
   FlowNodeData,
   FlowNodeKind,
@@ -135,6 +135,9 @@ export function buildStartRequestFromGraph(
       durationMs: numberValue(engineNode.data.durationMs, fallback.config.durationMs),
       requestTimeoutMs: numberValue(engineNode.data.requestTimeoutMs, fallback.config.requestTimeoutMs),
       maxConnsPerHost: numberValue(engineNode.data.maxConnsPerHost, fallback.config.maxConnsPerHost),
+      readBufferSize: numberValue(engineNode.data.readBufferSize, fallback.config.readBufferSize),
+      writeBufferSize: numberValue(engineNode.data.writeBufferSize, fallback.config.writeBufferSize),
+      maxResponseBytes: numberValue(engineNode.data.maxResponseBytes, fallback.config.maxResponseBytes),
       rateLimitRps: numberValue(engineNode.data.rateLimitRps, fallback.config.rateLimitRps),
       rampUpMs: numberValue(engineNode.data.rampUpMs, fallback.config.rampUpMs),
       latencySampleRate: numberValue(metricsNode?.data.latencySampleRate, fallback.config.latencySampleRate),
@@ -252,7 +255,7 @@ export function nextNodeIndexFromNodes(nodes: Node<FlowNodeData>[]) {
   }, nodes.length);
 }
 
-export function assessStartSafety(config: LoadConfig): SafetyAssessment {
+export function assessStartSafety(config: LoadConfig, preflight?: PreflightResponse): SafetyAssessment {
   const target = classifyTarget(config.url);
   const warnings: string[] = [];
   if (target.tone === "public") {
@@ -270,11 +273,18 @@ export function assessStartSafety(config: LoadConfig): SafetyAssessment {
   if (config.virtualUsers >= 1_000) {
     warnings.push("Virtual users are set to 1,000 or more.");
   }
+  if (preflight) {
+    warnings.push(...preflight.warnings.map((warning) => warning.message));
+  }
+  const uniqueWarnings = Array.from(new Set(warnings));
 
   return {
     target,
-    warnings,
-    confirmationRequired: warnings.length > 0,
+    warnings: uniqueWarnings,
+    confirmationRequired: uniqueWarnings.length > 0,
+    estimatedMemoryBytes: preflight?.estimate.memoryBytes ?? 0,
+    estimatedConnections: preflight?.estimate.connections ?? 0,
+    targetHosts: preflight?.estimate.targetHosts ?? 0,
   };
 }
 
@@ -349,6 +359,9 @@ function nodeTemplate(kind: FlowNodeKind, settings: Partial<FlowNodeData> | null
         durationMs: settings?.durationMs ?? 10_000,
         requestTimeoutMs: settings?.requestTimeoutMs ?? 1_000,
         maxConnsPerHost: settings?.maxConnsPerHost ?? 10_000,
+        readBufferSize: settings?.readBufferSize ?? 4_096,
+        writeBufferSize: settings?.writeBufferSize ?? 4_096,
+        maxResponseBytes: settings?.maxResponseBytes ?? 1_048_576,
         rateLimitRps: settings?.rateLimitRps ?? 1_000,
         rampUpMs: settings?.rampUpMs ?? 1_000,
       };

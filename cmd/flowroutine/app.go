@@ -38,6 +38,10 @@ func (a *App) StartLoad(req bridge.StartRequest) (bridge.StartResponse, error) {
 	return a.controller.Start(a.ctx, req)
 }
 
+func (a *App) PreflightLoad(req bridge.StartRequest) (bridge.PreflightResponse, error) {
+	return a.controller.Preflight(req)
+}
+
 func (a *App) StopLoad() error {
 	return a.controller.Stop()
 }
