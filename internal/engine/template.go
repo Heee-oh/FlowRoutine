@@ -51,7 +51,7 @@ func compileTemplateBytes(value []byte) (compiledTemplate, []string, error) {
 		}
 		end := start + len(templateOpenDelimiter) + endOffset
 		name := strings.TrimSpace(string(value[start+len(templateOpenDelimiter) : end]))
-		if err := validateVariableName(name); err != nil {
+		if err := validateVariableSyntax(name); err != nil {
 			return compiledTemplate{}, nil, fmt.Errorf("variable %q: %w", name, err)
 		}
 

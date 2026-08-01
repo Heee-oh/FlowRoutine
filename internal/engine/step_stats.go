@@ -73,6 +73,7 @@ type RequestStepSnapshot struct {
 	P95LatencyNano          uint64
 	P99LatencyNano          uint64
 	P999LatencyNano         uint64
+	LatencyBuckets          [LatencyBucketCount]uint64
 	StatusCodes             []StepStatusCodeCount
 }
 
@@ -162,6 +163,7 @@ func (s *AtomicStats) RequestStepSnapshots() []RequestStepSnapshot {
 		snapshot.P95LatencyNano = PercentileLatencyNano(&latencyBuckets, snapshot.LatencySamples, 0.95)
 		snapshot.P99LatencyNano = PercentileLatencyNano(&latencyBuckets, snapshot.LatencySamples, 0.99)
 		snapshot.P999LatencyNano = PercentileLatencyNano(&latencyBuckets, snapshot.LatencySamples, 0.999)
+		snapshot.LatencyBuckets = latencyBuckets
 		for code, count := range statusCodes {
 			if count > 0 {
 				snapshot.StatusCodes = append(snapshot.StatusCodes, StepStatusCodeCount{

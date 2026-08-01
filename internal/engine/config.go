@@ -25,6 +25,8 @@ const (
 	MaxScenarioStepNameBytes = 256
 	MaxAssertionSubjectBytes = 1_024
 	MaxAssertionValueBytes   = 4_096
+	MaxRuntimeVariables      = 256
+	MaxRuntimeVariableBytes  = 64 << 10
 )
 
 type Header struct {
@@ -49,6 +51,7 @@ type Config struct {
 	RampUp            time.Duration
 	Profile           *LoadProfile
 	ScenarioSteps     []ScenarioStep
+	RuntimeVariables  map[string]string
 }
 
 type StepKind string
@@ -155,6 +158,7 @@ type compiledConfig struct {
 	steps             []compiledStep
 	clients           []compiledClient
 	assertionCount    int
+	runtimeVariables  map[string]string
 }
 
 type compiledHeader struct {
@@ -261,6 +265,11 @@ func compileConfig(cfg Config) (compiledConfig, error) {
 			cfg.RateLimitRPS,
 		)
 	}
+	runtimeVariables, err := compileRuntimeVariables(cfg.RuntimeVariables)
+	if err != nil {
+		return compiledConfig{}, err
+	}
+	cfg.RuntimeVariables = runtimeVariables
 
 	method := cfg.Method
 	if method == "" {
@@ -315,6 +324,7 @@ func compileConfig(cfg Config) (compiledConfig, error) {
 		steps:             steps,
 		clients:           clients,
 		assertionCount:    compiledAssertionCount(steps),
+		runtimeVariables:  runtimeVariables,
 	}, nil
 }
 
@@ -339,7 +349,10 @@ func compileScenarioSteps(cfg Config, defaultMethod string) ([]compiledStep, []c
 	}
 
 	clientIndexes := make(map[string]int)
-	availableVariables := make(map[string]VariableScope)
+	availableVariables := make(map[string]VariableScope, len(cfg.RuntimeVariables))
+	for name := range cfg.RuntimeVariables {
+		availableVariables[name] = "runtime"
+	}
 	stepIDs := make(map[string]struct{}, len(steps))
 	clients := make([]compiledClient, 0, len(steps))
 	compiled := make([]compiledStep, 0, len(steps))
@@ -785,11 +798,19 @@ func parseTemplateNames(value string) ([]string, error) {
 }
 
 func validateVariableName(name string) error {
-	if name == "" {
-		return errors.New("name is required")
-	}
 	if strings.HasPrefix(strings.ToUpper(name), "SECRET_") {
 		return errors.New("SECRET_ prefix is reserved for runtime bindings")
+	}
+	return validateVariableSyntax(name)
+}
+
+func validateRuntimeVariableName(name string) error {
+	return validateVariableSyntax(name)
+}
+
+func validateVariableSyntax(name string) error {
+	if name == "" {
+		return errors.New("name is required")
 	}
 	for index, character := range name {
 		valid := character == '_' ||
@@ -806,6 +827,26 @@ func validateVariableName(name string) error {
 		}
 	}
 	return nil
+}
+
+func compileRuntimeVariables(values map[string]string) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if len(values) > MaxRuntimeVariables {
+		return nil, fmt.Errorf("runtime variables must contain at most %d entries", MaxRuntimeVariables)
+	}
+	compiled := make(map[string]string, len(values))
+	for name, value := range values {
+		if err := validateRuntimeVariableName(name); err != nil {
+			return nil, fmt.Errorf("runtime variable %q: %w", name, err)
+		}
+		if len(value) > MaxRuntimeVariableBytes {
+			return nil, fmt.Errorf("runtime variable %q must be at most %d bytes", name, MaxRuntimeVariableBytes)
+		}
+		compiled[name] = value
+	}
+	return compiled, nil
 }
 
 func parseJSONPath(path string) ([]string, error) {

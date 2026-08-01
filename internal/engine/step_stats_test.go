@@ -43,6 +43,13 @@ func TestRequestStepStatsAggregateToGlobalRequestTotals(t *testing.T) {
 		if step.LatencySamples == 0 || step.P99LatencyNano == 0 {
 			t.Fatalf("request step did not retain its latency histogram: %+v", step)
 		}
+		var bucketSamples uint64
+		for _, count := range step.LatencyBuckets {
+			bucketSamples += count
+		}
+		if bucketSamples != step.LatencySamples {
+			t.Fatalf("request step exposed %d histogram samples, want %d", bucketSamples, step.LatencySamples)
+		}
 	}
 	if total != aggregate.TotalRequests || success != aggregate.SuccessRequests || failed != aggregate.FailedRequests {
 		t.Fatalf("step totals total=%d success=%d failed=%d do not match aggregate %+v", total, success, failed, aggregate)

@@ -26,6 +26,7 @@ Built with OpenAI Codex assistance.
 - **Named environments**: Switch `{{BASE_URL}}` and uppercase variables per profile while keeping `SECRET_*` values memory-only.
 - **Versioned scenario library**: Name and tag scenarios, recover autosaved drafts, migrate older saves, undo destructive graph changes, and exchange sanitized JSON files.
 - **Local load engine**: Run staged virtual-user or arrival-rate profiles locally with goroutines, `fasthttp`, keep-alive reuse, and pooled request/response objects.
+- **Native distributed workers**: Coordinate mTLS-authenticated workers with synchronized starts, total-preserving load shards, and exact histogram aggregation.
 - **Realtime feedback**: Track RPS, latency, failures, status code counts, and bounded live chart data through batched Wails events.
 - **Shareable local reports**: Export completed runs as redacted JSON reports with summary metrics, error breakdowns, status codes, and timeline points.
 - **SLO gates**: Configure failure-rate, latency, and RPS thresholds on the Metrics node and get pass/fail results locally or in exported k6 scripts.
@@ -57,7 +58,7 @@ go build ./...
 | Scenario canvas | Request, Engine, Metrics, Window, Delay, and Assert nodes |
 | Import | OpenAPI / Swagger JSON or YAML URL import, Postman Collection v2 JSON import, and browser HAR import |
 | Request setup | Named environments, versioned scenario library, method, URL, headers, body, auth helpers, and JSON capture variables |
-| Execution | Linear path execution from Request through Engine, with Delay and typed Assert support |
+| Execution | Linear path execution from Request through Engine, with Delay, typed Assert, and opt-in native distributed workers |
 | Engine | Constant/ramping VUs, constant/ramping arrival rate, graceful stop, RPS cap, timeouts, max connections, keep-alive reuse |
 | Metrics | RPS, aggregate and request-step counts, latency percentiles, transport failures, typed assertion failures, dropped iterations, and HTTP status diagnostics |
 | Reports | Completed-run JSON export with per-step diagnostics, SLO pass/fail, local baseline comparison, and sensitive-data redaction |
@@ -162,6 +163,13 @@ Go load engine
   - fasthttp host clients
   - sync.Pool request/response reuse
   - sharded atomic stats
+        ^
+        | versioned plans + mTLS control traffic
+        |
+Optional native workers
+  - synchronized scheduled start
+  - total-preserving load shards
+  - exact histogram aggregation
 ```
 
 ## Benchmark Helper
@@ -179,6 +187,33 @@ go run ./cmd/flowroutine-bench -url https://example.com -duration 5s -warmup 1s 
 ```
 
 Benchmark results vary by hardware, OS limits, network path, TLS cost, and target capacity. Treat local results as measurements of that environment, not universal project guarantees.
+
+## Distributed Workers
+
+The desktop application remains local-only by default. Opt-in native workers require TLS 1.3 mutual authentication;
+there is no plaintext or certificate-verification bypass. Build and start a worker with a dedicated worker
+certificate, its private key, and the CA used to authenticate coordinator certificates:
+
+```bash
+go build ./cmd/flowroutine-worker
+./flowroutine-worker \
+  -worker-id worker-seoul-1 \
+  -listen 127.0.0.1:9443 \
+  -tls-cert worker.pem \
+  -tls-key worker-key.pem \
+  -client-ca coordinator-ca.pem
+```
+
+Execution plans carry an explicit schema version, ID, revision, and digest. Runtime bindings such as
+`SECRET_TOKEN` travel separately over mTLS, remain in memory, and are never returned by worker APIs. The
+coordinator partitions VUs, arrival rates, RPS caps, worker capacity, and connection limits without multiplying
+the requested total. It estimates each worker clock from the request midpoint before scheduling a shared start.
+
+Workers expose cumulative fixed-bucket histograms. The coordinator merges those buckets and recomputes
+percentiles instead of averaging percentiles. If a worker becomes unreachable or reports regressing counters,
+its last valid cumulative snapshot is retained and the result is marked partial/stale. Aggregates convert through
+the same metrics-batch schema used by local reports. Certificate setup, trust boundaries, and failure behavior are
+documented in [Distributed load security](docs/distributed-load.md).
 
 ## Release Security
 
@@ -208,7 +243,7 @@ Load testing can disrupt real services. FlowRoutine includes RPS caps, ramp-up c
 ## Current Limits
 
 - Graph execution follows one selected linear scenario path.
-- Distributed load generation is not implemented.
+- Native distributed execution is currently exposed through the Go coordinator API; desktop runs remain local-only.
 - The desktop app does not install updates automatically; signed metadata defines an explicit opt-in protocol for a future client.
 - Environment and auth secret values are memory-only and are not saved in profiles or recent-run history.
 
