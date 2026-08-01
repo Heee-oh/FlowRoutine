@@ -42,6 +42,31 @@ type ScenarioStep struct {
 	Captures       []Capture `json:"captures"`
 }
 
+type ExecutionPlan struct {
+	SchemaVersion int                 `json:"schemaVersion"`
+	EntryStepID   string              `json:"entryStepId"`
+	Steps         []ExecutionPlanStep `json:"steps"`
+}
+
+type ExecutionPlanStep struct {
+	ID            string           `json:"id"`
+	Kind          string           `json:"kind"`
+	NextStepID    string           `json:"nextStepId,omitempty"`
+	RequestStepID string           `json:"requestStepId,omitempty"`
+	Routes        []ExecutionRoute `json:"routes,omitempty"`
+	JoinStepID    string           `json:"joinStepId,omitempty"`
+	BodyStepID    string           `json:"bodyStepId,omitempty"`
+	ExitStepID    string           `json:"exitStepId,omitempty"`
+	MaxIterations int              `json:"maxIterations,omitempty"`
+}
+
+type ExecutionRoute struct {
+	ID           string `json:"id"`
+	Name         string `json:"name,omitempty"`
+	TargetStepID string `json:"targetStepId"`
+	Weight       int    `json:"weight"`
+}
+
 type Assertion struct {
 	Type         string `json:"type"`
 	Operator     string `json:"operator"`
@@ -91,6 +116,7 @@ type LoadConfig struct {
 	RampUpMS          int64          `json:"rampUpMs"`
 	Profile           *LoadProfile   `json:"profile,omitempty"`
 	ScenarioSteps     []ScenarioStep `json:"scenarioSteps"`
+	ExecutionPlan     *ExecutionPlan `json:"executionPlan,omitempty"`
 }
 
 type SnapshotResponse struct {
@@ -120,6 +146,7 @@ type SnapshotResponse struct {
 	BytesWritten            uint64                 `json:"bytesWritten"`
 	StatusCodes             []StatusCodeCount      `json:"statusCodes"`
 	StepMetrics             []RequestStepMetrics   `json:"stepMetrics"`
+	BranchMetrics           []BranchRouteMetrics   `json:"branchMetrics"`
 }
 
 type AssertionFailureCounts struct {
@@ -292,7 +319,7 @@ func (c *Controller) Snapshot() (SnapshotResponse, error) {
 	if e == nil {
 		return SnapshotResponse{}, ErrControllerNotStarted
 	}
-	return snapshotResponse(e.Snapshot(), e.RequestStepSnapshots()), nil
+	return snapshotResponse(e.Snapshot(), e.RequestStepSnapshots(), e.BranchRouteSnapshots()), nil
 }
 
 func (c *Controller) stopBatcherWhenEngineStops(e *engine.Engine, batcher *Batcher) {
@@ -392,6 +419,27 @@ func (c LoadConfig) toEngineConfigWithRuntime(runtimeBindings map[string]string)
 			GracefulStop:    time.Duration(c.Profile.GracefulStopMS) * time.Millisecond,
 		}
 	}
+	var executionPlan *engine.ExecutionPlan
+	if c.ExecutionPlan != nil {
+		executionPlan = &engine.ExecutionPlan{
+			SchemaVersion: c.ExecutionPlan.SchemaVersion,
+			EntryStepID:   c.ExecutionPlan.EntryStepID,
+			Steps:         make([]engine.ExecutionPlanStep, len(c.ExecutionPlan.Steps)),
+		}
+		for index, step := range c.ExecutionPlan.Steps {
+			routes := make([]engine.ExecutionRoute, len(step.Routes))
+			for routeIndex, route := range step.Routes {
+				routes[routeIndex] = engine.ExecutionRoute{
+					ID: route.ID, Name: route.Name, TargetStepID: route.TargetStepID, Weight: route.Weight,
+				}
+			}
+			executionPlan.Steps[index] = engine.ExecutionPlanStep{
+				ID: step.ID, Kind: engine.ExecutionPlanStepKind(step.Kind), NextStepID: step.NextStepID,
+				RequestStepID: step.RequestStepID, Routes: routes, JoinStepID: step.JoinStepID,
+				BodyStepID: step.BodyStepID, ExitStepID: step.ExitStepID, MaxIterations: step.MaxIterations,
+			}
+		}
+	}
 
 	return engine.Config{
 		URL:               c.URL,
@@ -410,6 +458,7 @@ func (c LoadConfig) toEngineConfigWithRuntime(runtimeBindings map[string]string)
 		RampUp:            time.Duration(c.RampUpMS) * time.Millisecond,
 		Profile:           profile,
 		ScenarioSteps:     steps,
+		ExecutionPlan:     executionPlan,
 		RuntimeVariables:  cloneRuntimeBindings(runtimeBindings),
 	}
 }
@@ -425,7 +474,11 @@ func cloneRuntimeBindings(bindings map[string]string) map[string]string {
 	return cloned
 }
 
-func snapshotResponse(snapshot engine.Snapshot, steps []engine.RequestStepSnapshot) SnapshotResponse {
+func snapshotResponse(
+	snapshot engine.Snapshot,
+	steps []engine.RequestStepSnapshot,
+	branches []engine.BranchRouteSnapshot,
+) SnapshotResponse {
 	return SnapshotResponse{
 		StartedAtUnixMs:         snapshot.StartedAt.UnixMilli(),
 		AtUnixMs:                snapshot.At.UnixMilli(),
@@ -453,6 +506,7 @@ func snapshotResponse(snapshot engine.Snapshot, steps []engine.RequestStepSnapsh
 		BytesWritten:            snapshot.BytesWritten,
 		StatusCodes:             buildStatusCodeCounts(snapshot.StatusCodes),
 		StepMetrics:             buildRequestStepMetrics(steps),
+		BranchMetrics:           buildBranchRouteMetrics(branches),
 	}
 }
 

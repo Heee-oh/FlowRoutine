@@ -35,6 +35,7 @@ type AggregateResult struct {
 	AllTerminal  bool                         `json:"allTerminal"`
 	Snapshot     engine.Snapshot              `json:"snapshot"`
 	RequestSteps []engine.RequestStepSnapshot `json:"requestSteps,omitempty"`
+	BranchRoutes []engine.BranchRouteSnapshot `json:"branchRoutes,omitempty"`
 	Workers      []WorkerHealth               `json:"workers"`
 }
 
@@ -49,6 +50,7 @@ type Run struct {
 	snapshotMu sync.Mutex
 	mu         sync.Mutex
 	steps      []stepDescriptor
+	branches   []branchDescriptor
 }
 
 type runWorker struct {
@@ -63,6 +65,12 @@ type runWorker struct {
 type stepDescriptor struct {
 	id   string
 	name string
+}
+
+type branchDescriptor struct {
+	branchID string
+	routeID  string
+	name     string
 }
 
 func (run *Run) ID() string {
@@ -116,6 +124,13 @@ func (run *Run) Snapshot(ctx context.Context) AggregateResult {
 			}
 		}
 		if err := run.validateStepDescriptors(responses[index].RequestSteps); err != nil {
+			worker.health.Reachable = true
+			worker.health.Stale = true
+			worker.health.LastError = err.Error()
+			worker.health.LastSeenUnixNano = now.UnixNano()
+			continue
+		}
+		if err := run.validateBranchDescriptors(responses[index].BranchRoutes); err != nil {
 			worker.health.Reachable = true
 			worker.health.Stale = true
 			worker.health.LastError = err.Error()
@@ -209,7 +224,7 @@ func (run *Run) resultLocked(now time.Time) AggregateResult {
 			allTerminal = false
 		}
 	}
-	snapshot, steps := aggregateSnapshots(run.startedAt, now, responses)
+	snapshot, steps, branches := aggregateSnapshots(run.startedAt, now, responses)
 	return AggregateResult{
 		RunID:        run.id,
 		PlanID:       run.planID,
@@ -218,8 +233,31 @@ func (run *Run) resultLocked(now time.Time) AggregateResult {
 		AllTerminal:  allTerminal,
 		Snapshot:     snapshot,
 		RequestSteps: steps,
+		BranchRoutes: branches,
 		Workers:      workers,
 	}
+}
+
+func (run *Run) validateBranchDescriptors(branches []engine.BranchRouteSnapshot) error {
+	if run.branches == nil {
+		run.branches = make([]branchDescriptor, len(branches))
+		for index, branch := range branches {
+			run.branches[index] = branchDescriptor{
+				branchID: branch.BranchID, routeID: branch.RouteID, name: branch.Name,
+			}
+		}
+		return nil
+	}
+	if len(run.branches) != len(branches) {
+		return errors.New("worker returned mismatched branch-route metrics")
+	}
+	for index, branch := range branches {
+		descriptor := run.branches[index]
+		if descriptor.branchID != branch.BranchID || descriptor.routeID != branch.RouteID || descriptor.name != branch.Name {
+			return errors.New("worker returned mismatched branch-route metrics")
+		}
+	}
+	return nil
 }
 
 func (run *Run) validateStepDescriptors(steps []engine.RequestStepSnapshot) error {
@@ -275,6 +313,11 @@ func validateSnapshotResponse(response SnapshotResponse) error {
 			return errors.New("worker returned inconsistent request-step status metrics")
 		}
 	}
+	for _, branch := range response.BranchRoutes {
+		if branch.Success > branch.Total || branch.Failed != branch.Total-branch.Success {
+			return errors.New("worker returned inconsistent branch-route metrics")
+		}
+	}
 	return nil
 }
 
@@ -300,7 +343,25 @@ func validateMonotonicSnapshot(previous SnapshotResponse, current SnapshotRespon
 			return errors.New("worker request-step metrics moved backwards")
 		}
 	}
+	if len(previous.BranchRoutes) != len(current.BranchRoutes) {
+		return errors.New("worker branch-route metrics changed shape")
+	}
+	for index := range current.BranchRoutes {
+		if !branchSnapshotMonotonic(previous.BranchRoutes[index], current.BranchRoutes[index]) {
+			return errors.New("worker branch-route metrics moved backwards")
+		}
+	}
 	return nil
+}
+
+func branchSnapshotMonotonic(previous engine.BranchRouteSnapshot, current engine.BranchRouteSnapshot) bool {
+	return previous.BranchID == current.BranchID &&
+		previous.RouteID == current.RouteID &&
+		previous.Name == current.Name &&
+		current.Selections >= previous.Selections &&
+		current.Total >= previous.Total &&
+		current.Success >= previous.Success &&
+		current.Failed >= previous.Failed
 }
 
 func snapshotScalarsMonotonic(previous engine.Snapshot, current engine.Snapshot) bool {
@@ -368,10 +429,16 @@ func assertionsMonotonic(previous engine.AssertionFailureCounts, current engine.
 		current.CountOnly >= previous.CountOnly
 }
 
-func aggregateSnapshots(startedAt time.Time, now time.Time, responses []SnapshotResponse) (engine.Snapshot, []engine.RequestStepSnapshot) {
+func aggregateSnapshots(
+	startedAt time.Time,
+	now time.Time,
+	responses []SnapshotResponse,
+) (engine.Snapshot, []engine.RequestStepSnapshot, []engine.BranchRouteSnapshot) {
 	aggregate := engine.Snapshot{StartedAt: startedAt, At: now, MinLatencyNano: math.MaxUint64}
 	stepOrder := make([]string, 0)
 	steps := make(map[string]*engine.RequestStepSnapshot)
+	branchOrder := make([]string, 0)
+	branches := make(map[string]*engine.BranchRouteSnapshot)
 	for _, response := range responses {
 		addSnapshot(&aggregate, response.Snapshot)
 		for _, next := range response.RequestSteps {
@@ -382,6 +449,21 @@ func aggregateSnapshots(startedAt time.Time, now time.Time, responses []Snapshot
 				stepOrder = append(stepOrder, next.ID)
 			}
 			addStepSnapshot(current, next)
+		}
+		for _, next := range response.BranchRoutes {
+			key := next.BranchID + "\x00" + next.RouteID
+			current, exists := branches[key]
+			if !exists {
+				current = &engine.BranchRouteSnapshot{
+					BranchID: next.BranchID, RouteID: next.RouteID, Name: next.Name,
+				}
+				branches[key] = current
+				branchOrder = append(branchOrder, key)
+			}
+			current.Selections += next.Selections
+			current.Total += next.Total
+			current.Success += next.Success
+			current.Failed += next.Failed
 		}
 	}
 	if aggregate.MinLatencyNano == math.MaxUint64 {
@@ -402,7 +484,11 @@ func aggregateSnapshots(startedAt time.Time, now time.Time, responses []Snapshot
 		step.P999LatencyNano = engine.PercentileLatencyNano(&step.LatencyBuckets, step.LatencySamples, 0.999)
 		stepSnapshots = append(stepSnapshots, *step)
 	}
-	return aggregate, stepSnapshots
+	branchSnapshots := make([]engine.BranchRouteSnapshot, 0, len(branchOrder))
+	for _, key := range branchOrder {
+		branchSnapshots = append(branchSnapshots, *branches[key])
+	}
+	return aggregate, stepSnapshots, branchSnapshots
 }
 
 func addSnapshot(target *engine.Snapshot, next engine.Snapshot) {

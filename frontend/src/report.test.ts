@@ -184,10 +184,20 @@ describe("buildRunReport", () => {
       runLatency: { samples: 10, avgMs: 25, minMs: 1, maxMs: 50, p95Ms: 45, p99Ms: 50, p999Ms: 50 },
       statusCodes: [{ code: 200, count: 8 }, { code: 500, count: 2 }],
     }];
+    batch.branchMetrics = [{
+      branchId: "branch-main",
+      routeId: "route-a",
+      name: "Route A",
+      selections: 6,
+      total: 6,
+      success: 6,
+      failed: 0,
+    }];
 
     const report = buildRunReport(request, reportMetrics([batch]));
 
     expect(report.summary.requestSteps).toEqual(batch.stepMetrics);
+    expect(report.summary.branchRoutes).toEqual(batch.branchMetrics);
     expect(report.summary.failures.assertionTypes).toEqual(batch.assertionFailuresByType);
     expect(report.summary.requestSteps.reduce((total, step) => total + step.total, 0)).toBe(report.summary.totalRequests);
   });
@@ -232,7 +242,7 @@ describe("buildRunReport", () => {
     otherSecrets.config.scenarioSteps[0].url = "https://example.com/items?X-Amz-Signature=different";
     otherSecrets.config.scenarioSteps[1].assertion!.expected = "different";
 
-    expect(report.schemaVersion).toBe(8);
+    expect(report.schemaVersion).toBe(9);
     expect(serialized).not.toMatch(/alice|password|report-(?:url|auth|step|api|name|assertion)-secret/);
     expect(report.run.targetUrl).toContain("REDACTED");
     expect(report.config.headers[0].value).toBe("[redacted]");

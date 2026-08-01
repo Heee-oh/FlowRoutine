@@ -43,6 +43,12 @@ Use [the committed CI scenario](../examples/headless/ci-smoke.flowroutine.json) 
 Visual graph files are not accepted directly because headless and desktop execution both consume the compiled
 configuration after graph validation.
 
+`scenario.config.executionPlan`, when present, uses schema version `1` and references payloads in
+`scenarioSteps` by stable step ID. Branch routes carry positive integer weights and an explicit Join ID; loops
+carry a body step, optional exit step, and a 1-1,000 iteration bound. The runner rejects unbounded cycles,
+early route merges, missing joins, and templates whose captures are not available on every execution path.
+JSON reports use report schema version `2` and include cumulative branch-route selections and request totals.
+
 ## Runtime secrets
 
 Store placeholders such as `{{SECRET_TOKEN}}` in the scenario and declare every name in

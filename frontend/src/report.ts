@@ -1,9 +1,9 @@
-import type { AssertionDefinition, AssertionFailureCounts, Header, LoadProfile, MetricsBatch, QualityGate, RequestStepMetrics, ScenarioStep, StartRequest, StatusCodeCount } from "./types";
+import type { AssertionDefinition, AssertionFailureCounts, BranchRouteMetrics, ExecutionPlan, Header, LoadProfile, MetricsBatch, QualityGate, RequestStepMetrics, ScenarioStep, StartRequest, StatusCodeCount } from "./types";
 import type { MetricHistoryPoint } from "./metricHistory";
 import { isSensitiveHeaderName, isSensitiveHeaderValue, redactHeaders, redactSensitiveURL } from "./secretSanitization";
 
 export type RunReport = {
-  schemaVersion: 8;
+  schemaVersion: 9;
   generatedAtUnixMs: number;
   run: {
     targetUrl: string;
@@ -43,6 +43,7 @@ type ReportConfig = {
   headers: Header[];
   bodyBytes: number;
   scenarioSteps: ReportScenarioStep[];
+  executionPlan?: ExecutionPlan;
 };
 
 type ReportScenarioStep = {
@@ -95,6 +96,7 @@ type ReportSummary = {
   };
   statusCodes: StatusCodeCount[];
   requestSteps: RequestStepMetrics[];
+  branchRoutes: BranchRouteMetrics[];
 };
 
 type ReportTimelinePoint = {
@@ -168,7 +170,7 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
   const averageRps = elapsedMs > 0 ? total / (elapsedMs / 1_000) : 0;
 
   return {
-    schemaVersion: 8,
+    schemaVersion: 9,
     generatedAtUnixMs: Date.now(),
     run: {
       targetUrl: redactReportText(request.config.url, runtimeSecretValues),
@@ -198,6 +200,7 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
       headers: redactReportHeaders(request.config.headers, runtimeSecretValues),
       bodyBytes: byteLength(request.config.body),
       scenarioSteps: request.config.scenarioSteps.map((step) => redactScenarioStep(step, runtimeSecretValues)),
+      executionPlan: request.config.executionPlan ? cloneExecutionPlan(request.config.executionPlan) : undefined,
     },
     summary: {
       averageRps,
@@ -238,6 +241,7 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
         count: status.count,
       })),
       requestSteps: (finalBatch.stepMetrics ?? []).map((step) => redactRequestStepMetrics(step, runtimeSecretValues)),
+      branchRoutes: (finalBatch.branchMetrics ?? []).map((route) => ({ ...route })),
     },
     qualityGate: evaluateQualityGate(qualityGate, finalBatch, averageRps),
     baseline: {
@@ -373,11 +377,24 @@ function baselineKey(request: StartRequest) {
       JSON.stringify(step.assertion ? redactAssertion(step.assertion, runtimeSecretValues) : null),
     ].join(":"))
     .join("|");
+  const executionSignature = JSON.stringify(request.config.executionPlan ?? null);
   return stableHash([
     request.config.method,
     canonicalURL(redactRuntimeSecrets(request.config.url, runtimeSecretValues)),
     scenarioSignature,
+    executionSignature,
   ].join("|"));
+}
+
+function cloneExecutionPlan(plan: ExecutionPlan): ExecutionPlan {
+  return {
+    schemaVersion: 1,
+    entryStepId: plan.entryStepId,
+    steps: plan.steps.map((step) => ({
+      ...step,
+      routes: step.routes?.map((route) => ({ ...route })),
+    })),
+  };
 }
 
 function buildBaselineSnapshot(key: string, report: RunReport): BaselineSnapshot {

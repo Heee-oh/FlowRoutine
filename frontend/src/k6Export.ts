@@ -23,6 +23,9 @@ export function downloadK6Script(request: StartRequest) {
 }
 
 export function buildK6Script(request: StartRequest) {
+  if (request.config.executionPlan) {
+    throw new Error("k6 export does not yet support Branch, Join, or Loop execution plans");
+  }
   const steps = scenarioSteps(request);
   validateK6Compatibility(request, steps);
   validateTemplateOrder(steps);

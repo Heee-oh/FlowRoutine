@@ -758,6 +758,18 @@ button:disabled {
   border-color: rgba(255, 153, 102, 0.48);
 }
 
+.flow-node-branch {
+  border-color: rgba(255, 118, 182, 0.52);
+}
+
+.flow-node-join {
+  border-color: rgba(90, 210, 210, 0.5);
+}
+
+.flow-node-loop {
+  border-color: rgba(148, 180, 255, 0.52);
+}
+
 .flow-node.flow-node-invalid,
 .react-flow__node.selected .flow-node.flow-node-invalid {
   border-color: rgba(255, 107, 107, 0.78);

@@ -127,9 +127,15 @@ export const useMetricsStore = create<MetricsState>((set) => ({
   })),
   pushBatch: (batch) =>
     set((state) => {
-      const nextBatch = batch.stepMetrics === undefined && state.latest?.stepMetrics
-        ? { ...batch, stepMetrics: state.latest.stepMetrics }
-        : batch;
+      const nextBatch = {
+        ...batch,
+        ...(batch.stepMetrics === undefined && state.latest?.stepMetrics
+          ? { stepMetrics: state.latest.stepMetrics }
+          : {}),
+        ...(batch.branchMetrics === undefined && state.latest?.branchMetrics
+          ? { branchMetrics: state.latest.branchMetrics }
+          : {}),
+      };
       const cutoff = nextBatch.timestampUnixMs - state.metricWindowMs;
       const point = metricHistoryPoint(nextBatch);
       state.liveHistory.add(point, cutoff);

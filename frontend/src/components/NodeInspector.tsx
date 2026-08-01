@@ -310,6 +310,59 @@ const NodeFields = memo(function NodeFields({
             <NumberInput value={node.data.delayMs ?? 100} min={0} max={300_000} onChange={(value) => updateNode({ delayMs: value })} />
         </Field>
       );
+    case "branch":
+      return (
+        <>
+          <Field label="Join node ID">
+            <input
+              value={node.data.branchJoinNodeId ?? ""}
+              placeholder="join-8"
+              onChange={(event) => updateNode({ branchJoinNodeId: event.target.value })}
+            />
+          </Field>
+          <Field label="Route weights">
+            <textarea
+              rows={4}
+              value={node.data.branchRoutesText ?? ""}
+              spellCheck={false}
+              placeholder={"request-a=1\nrequest-b=3"}
+              onChange={(event) => updateNode({ branchRoutesText: event.target.value })}
+            />
+          </Field>
+          <div className="inspector-note">
+            Connect two or more routes to this node. Omitted targets use weight 1; every route must converge at the Join ID.
+          </div>
+        </>
+      );
+    case "join":
+      return (
+        <div className="inspector-note">
+          Connect every route from one Branch into this node. Route-local iteration and run variables are discarded here.
+        </div>
+      );
+    case "loop":
+      return (
+        <>
+          <Field label="Body target node ID">
+            <input
+              value={node.data.loopBodyTargetId ?? ""}
+              placeholder="request-7"
+              onChange={(event) => updateNode({ loopBodyTargetId: event.target.value })}
+            />
+          </Field>
+          <Field label="Maximum iterations">
+            <NumberInput
+              value={node.data.loopMaxIterations ?? 1}
+              min={1}
+              max={1_000}
+              onChange={(value) => updateNode({ loopMaxIterations: value })}
+            />
+          </Field>
+          <div className="inspector-note">
+            Add one body edge that returns to this Loop and one exit edge. Nested loops are intentionally rejected.
+          </div>
+        </>
+      );
     case "metrics":
       return (
         <>

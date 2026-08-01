@@ -93,6 +93,45 @@ func TestPreflightAssignsStableStepIdentityAndEstimatesStepMetrics(t *testing.T)
 	}
 }
 
+func TestPreflightNormalizesAndMapsBranchExecutionPlan(t *testing.T) {
+	request := validPreflightRequest()
+	request.Config.ScenarioSteps = []ScenarioStep{
+		{ID: "entry", Kind: "request", URL: request.Config.URL + "/entry"},
+		{ID: "a", Kind: "request", URL: request.Config.URL + "/a"},
+		{ID: "b", Kind: "request", URL: request.Config.URL + "/b"},
+	}
+	request.Config.ExecutionPlan = &ExecutionPlan{
+		SchemaVersion: engine.ExecutionPlanSchemaVersion,
+		EntryStepID:   " entry ",
+		Steps: []ExecutionPlanStep{
+			{ID: " entry ", Kind: " step ", NextStepID: " branch "},
+			{ID: "branch", Kind: "branch", JoinStepID: "join", Routes: []ExecutionRoute{
+				{ID: "a", TargetStepID: "a", Weight: 1},
+				{ID: "b", TargetStepID: "b", Weight: 2},
+			}},
+			{ID: "a", Kind: "step", NextStepID: "join"},
+			{ID: "b", Kind: "step", NextStepID: "join"},
+			{ID: "join", Kind: "join"},
+		},
+	}
+
+	preflight, err := preflightStartRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := preflight.normalizedConfig.ExecutionPlan
+	if plan == nil || plan.EntryStepID != "entry" || plan.Steps[0].ID != "entry" || plan.Steps[0].Kind != "step" {
+		t.Fatalf("execution plan was not normalized: %+v", plan)
+	}
+	enginePlan := preflight.normalizedConfig.toEngineConfig().ExecutionPlan
+	if enginePlan == nil || len(enginePlan.Steps[1].Routes) != 2 || enginePlan.Steps[1].Routes[1].Weight != 2 {
+		t.Fatalf("execution plan was not mapped to the engine: %+v", enginePlan)
+	}
+	if preflight.Estimate.MemoryBytes == 0 {
+		t.Fatal("expected branch metrics in the memory estimate")
+	}
+}
+
 func TestPreflightNormalizesAndMapsRichAssertions(t *testing.T) {
 	request := validPreflightRequest()
 	request.Config.ScenarioSteps = []ScenarioStep{

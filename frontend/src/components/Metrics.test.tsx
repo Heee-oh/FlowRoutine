@@ -25,6 +25,15 @@ describe("request-step metrics", () => {
             stepMetrics("slow", "GET slow", 10, 0, 900, [{ code: 200, count: 10 }]),
             stepMetrics("failing", "POST failing", 2, 2, 20, [{ code: 500, count: 2 }]),
           ],
+          branchMetrics: [{
+            branchId: "branch-main",
+            routeId: "route-b",
+            name: "Checkout route",
+            selections: 4,
+            total: 8,
+            success: 6,
+            failed: 2,
+          }],
         }}
         onClose={vi.fn()}
       />,
@@ -36,6 +45,9 @@ describe("request-step metrics", () => {
     expect(markup).toContain("900 / 900 ms");
     expect(markup).toContain("Header 1");
     expect(markup).toContain("Count-only 1");
+    expect(markup).toContain("Branch routes");
+    expect(markup).toContain("Checkout route");
+    expect(markup).toContain("branch-main · route-b");
   });
 });
 

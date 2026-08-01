@@ -134,6 +134,97 @@ describe("validateScenarioGraph", () => {
     expect(compiled.path[compiled.path.length - 1]).toBe("engine");
   });
 
+  it("compiles explicit weighted branches into a versioned execution plan", () => {
+    const request = flowNode("request", "request");
+    const branch = flowNode("branch", "branch");
+    branch.data.branchJoinNodeId = "join";
+    branch.data.branchRoutesText = "route-a=1\nroute-b=3";
+    const nodes = [
+      request,
+      branch,
+      flowNode("route-a", "request"),
+      flowNode("route-b", "request"),
+      flowNode("join", "join"),
+      flowNode("engine", "engine"),
+    ];
+    const validation = validateScenarioGraph(nodes, [
+      edge("request", "branch"),
+      edge("branch", "route-a"),
+      edge("branch", "route-b"),
+      edge("route-a", "join"),
+      edge("route-b", "join"),
+      edge("join", "engine"),
+    ]);
+
+    expect(validation.issues).toEqual([]);
+    expect(validation.compiled?.executionPlan).toEqual(expect.objectContaining({
+      schemaVersion: 1,
+      entryStepId: "request",
+    }));
+    expect(validation.compiled?.executionPlan?.steps.find((step) => step.id === "branch")).toEqual({
+      id: "branch",
+      kind: "branch",
+      joinStepId: "join",
+      routes: [
+        { id: "route-a", name: "request", targetStepId: "route-a", weight: 1 },
+        { id: "route-b", name: "request", targetStepId: "route-b", weight: 3 },
+      ],
+    });
+  });
+
+  it("compiles only explicit bounded loop back-edges", () => {
+    const loop = flowNode("loop", "loop");
+    loop.data.loopBodyTargetId = "body";
+    loop.data.loopMaxIterations = 4;
+    const validation = validateScenarioGraph([
+      flowNode("request", "request"),
+      loop,
+      flowNode("body", "request"),
+      flowNode("engine", "engine"),
+    ], [
+      edge("request", "loop"),
+      edge("loop", "body"),
+      edge("body", "loop"),
+      edge("loop", "engine"),
+    ]);
+
+    expect(validation.issues).toEqual([]);
+    expect(validation.compiled?.executionPlan?.steps.find((step) => step.id === "loop")).toEqual({
+      id: "loop",
+      kind: "loop",
+      bodyStepId: "body",
+      maxIterations: 4,
+    });
+  });
+
+  it("rejects branch paths that merge before their declared Join", () => {
+    const branch = flowNode("branch", "branch");
+    branch.data.branchJoinNodeId = "join";
+    const validation = validateScenarioGraph([
+      flowNode("request", "request"),
+      branch,
+      flowNode("route-a", "delay"),
+      flowNode("route-b", "delay"),
+      flowNode("early", "delay"),
+      flowNode("join", "join"),
+      flowNode("engine", "engine"),
+    ], [
+      edge("request", "branch"),
+      edge("branch", "route-a"),
+      edge("branch", "route-b"),
+      edge("route-a", "early"),
+      edge("route-b", "early"),
+      edge("early", "join"),
+      edge("join", "engine"),
+    ]);
+
+    expect(validation.compiled).toBeNull();
+    expect(validation.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "merge", nodeId: "early" }),
+      expect.objectContaining({ code: "invalid_branch", nodeId: "branch" }),
+    ]));
+  });
+
   it("throws a typed validation error for invalid graphs", () => {
     expect(() => compileScenarioGraph([], [])).toThrow(ScenarioGraphValidationError);
   });
@@ -144,6 +235,9 @@ const tones: Record<FlowNodeKind, FlowNodeData["tone"]> = {
   engine: "engine",
   assertion: "assertion",
   delay: "delay",
+  branch: "branch",
+  join: "join",
+  loop: "loop",
   metrics: "metrics",
   window: "window",
 };

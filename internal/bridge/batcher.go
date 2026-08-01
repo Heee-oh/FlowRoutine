@@ -48,6 +48,7 @@ type MetricsBatch struct {
 	BytesWritten                   uint64                   `json:"bytesWritten"`
 	StatusCodes                    []StatusCodeCount        `json:"statusCodes"`
 	StepMetrics                    []RequestStepMetrics     `json:"stepMetrics,omitempty"`
+	BranchMetrics                  []BranchRouteMetrics     `json:"branchMetrics,omitempty"`
 }
 
 type IntervalLatencyMetrics struct {
@@ -90,6 +91,16 @@ type RequestStepMetrics struct {
 	TemplateFailures        uint64                   `json:"templateFailures"`
 	RunLatency              CumulativeLatencyMetrics `json:"runLatency"`
 	StatusCodes             []StatusCodeCount        `json:"statusCodes"`
+}
+
+type BranchRouteMetrics struct {
+	BranchID   string `json:"branchId"`
+	RouteID    string `json:"routeId"`
+	Name       string `json:"name"`
+	Selections uint64 `json:"selections"`
+	Total      uint64 `json:"total"`
+	Success    uint64 `json:"success"`
+	Failed     uint64 `json:"failed"`
 }
 
 type Batcher struct {
@@ -151,15 +162,18 @@ func (b *Batcher) run(ctx context.Context, done chan struct{}) {
 	lastStepMetricsAt := time.Time{}
 	emit := func(now time.Time, forceStepMetrics bool) {
 		current := b.engine.Snapshot()
+		running := b.engine.Running()
 		var stepSnapshots []engine.RequestStepSnapshot
-		if shouldIncludeStepMetrics(lastStepMetricsAt, now, forceStepMetrics) {
+		var branchSnapshots []engine.BranchRouteSnapshot
+		if shouldIncludeStepMetrics(lastStepMetricsAt, now, forceStepMetrics, running) {
 			stepSnapshots = b.engine.RequestStepSnapshots()
+			branchSnapshots = b.engine.BranchRouteSnapshots()
 			lastStepMetricsAt = now
 		}
 		b.emitter.Emit(
 			ctx,
 			MetricsBatchEvent,
-			buildMetricsBatchWithSteps(previous, current, b.engine.Running(), now, stepSnapshots),
+			buildMetricsBatchWithDiagnostics(previous, current, running, now, stepSnapshots, branchSnapshots),
 		)
 		previous = current
 	}
@@ -203,12 +217,34 @@ func BuildMetricsBatch(
 	return buildMetricsBatchWithSteps(previous, current, running, now, stepSnapshots)
 }
 
+func BuildMetricsBatchWithBranches(
+	previous engine.Snapshot,
+	current engine.Snapshot,
+	running bool,
+	now time.Time,
+	stepSnapshots []engine.RequestStepSnapshot,
+	branchSnapshots []engine.BranchRouteSnapshot,
+) MetricsBatch {
+	return buildMetricsBatchWithDiagnostics(previous, current, running, now, stepSnapshots, branchSnapshots)
+}
+
 func buildMetricsBatchWithSteps(
 	previous engine.Snapshot,
 	current engine.Snapshot,
 	running bool,
 	now time.Time,
 	stepSnapshots []engine.RequestStepSnapshot,
+) MetricsBatch {
+	return buildMetricsBatchWithDiagnostics(previous, current, running, now, stepSnapshots, nil)
+}
+
+func buildMetricsBatchWithDiagnostics(
+	previous engine.Snapshot,
+	current engine.Snapshot,
+	running bool,
+	now time.Time,
+	stepSnapshots []engine.RequestStepSnapshot,
+	branchSnapshots []engine.BranchRouteSnapshot,
 ) MetricsBatch {
 	elapsed := current.At.Sub(previous.At).Seconds()
 	totalDelta := current.TotalRequests - previous.TotalRequests
@@ -253,11 +289,12 @@ func buildMetricsBatchWithSteps(
 		BytesWritten:                   current.BytesWritten,
 		StatusCodes:                    buildStatusCodeCounts(current.StatusCodes),
 		StepMetrics:                    buildRequestStepMetrics(stepSnapshots),
+		BranchMetrics:                  buildBranchRouteMetrics(branchSnapshots),
 	}
 }
 
-func shouldIncludeStepMetrics(last time.Time, now time.Time, force bool) bool {
-	return force || last.IsZero() || now.Sub(last) >= StepMetricsInterval
+func shouldIncludeStepMetrics(last time.Time, now time.Time, force bool, running bool) bool {
+	return force || !running || last.IsZero() || now.Sub(last) >= StepMetricsInterval
 }
 
 func buildRequestStepMetrics(snapshots []engine.RequestStepSnapshot) []RequestStepMetrics {
@@ -295,6 +332,21 @@ func buildRequestStepMetrics(snapshots []engine.RequestStepSnapshot) []RequestSt
 				P999Ms:  float64(snapshot.P999LatencyNano) / float64(time.Millisecond),
 			},
 			StatusCodes: statusCodes,
+		}
+	}
+	return metrics
+}
+
+func buildBranchRouteMetrics(snapshots []engine.BranchRouteSnapshot) []BranchRouteMetrics {
+	if len(snapshots) == 0 {
+		return nil
+	}
+	metrics := make([]BranchRouteMetrics, len(snapshots))
+	for index, snapshot := range snapshots {
+		metrics[index] = BranchRouteMetrics{
+			BranchID: snapshot.BranchID, RouteID: snapshot.RouteID, Name: snapshot.Name,
+			Selections: snapshot.Selections, Total: snapshot.Total,
+			Success: snapshot.Success, Failed: snapshot.Failed,
 		}
 	}
 	return metrics

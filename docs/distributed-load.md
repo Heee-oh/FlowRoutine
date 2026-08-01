@@ -61,10 +61,11 @@ All workers receive the same scenario and plan revision, but each receives its o
 
 ## Metrics and partial failure
 
-Workers return cumulative counters, HTTP status counts, and the engine's fixed 1,024-bucket latency histograms for
-the run and each request step. The coordinator sums buckets and recomputes P95/P99/P99.9. It never averages worker
-percentiles. The aggregate is compatible with `bridge.BuildMetricsBatch`, so local and distributed reports use the
-same frontend schema.
+Workers return cumulative counters, HTTP status counts, branch-route selections/request totals, and the engine's
+fixed 1,024-bucket latency histograms for the run and each request step. The coordinator sums buckets and
+recomputes P95/P99/P99.9; it never averages worker percentiles. Branch-route descriptors and counters are also
+validated for shape and monotonicity before aggregation. The aggregate can be converted with
+`bridge.BuildMetricsBatchWithBranches`, so local and distributed reports use the same frontend schema.
 
 Every new worker snapshot must be internally consistent and monotonic. When a worker is unreachable or returns
 invalid/regressing metrics, the coordinator:

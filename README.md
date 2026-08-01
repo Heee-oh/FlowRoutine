@@ -20,7 +20,7 @@ Built with OpenAI Codex assistance.
 
 ## Why FlowRoutine
 
-- **Visual scenario editing**: Build request, delay, assertion, engine, metrics, and chart-window nodes on a React Flow canvas.
+- **Visual scenario editing**: Build request, delay, assertion, branch, join, bounded-loop, engine, metrics, and chart-window nodes on a React Flow canvas.
 - **Postman/OpenAPI/HAR import**: Turn Postman Collection v2 JSON files, OpenAPI or Swagger JSON/YAML endpoints, or browser HAR captures into runnable scenario nodes.
 - **Stateful API flows**: Capture JSON response values and reuse them as `{{variables}}` in later request URLs, headers, or bodies.
 - **Named environments**: Switch `{{BASE_URL}}` and uppercase variables per profile while keeping `SECRET_*` values memory-only.
@@ -56,12 +56,12 @@ go build ./...
 
 | Area | What works |
 | --- | --- |
-| Scenario canvas | Request, Engine, Metrics, Window, Delay, and Assert nodes |
+| Scenario canvas | Request, Delay, Assert, Branch, Join, bounded Loop, Engine, Metrics, and Window nodes |
 | Import | OpenAPI / Swagger JSON or YAML URL import, Postman Collection v2 JSON import, and browser HAR import |
 | Request setup | Named environments, versioned scenario library, method, URL, headers, body, auth helpers, and JSON capture variables |
-| Execution | Linear path execution from Request through Engine, with Delay, typed Assert, and opt-in native distributed workers |
+| Execution | Linear or deterministic weighted branch paths, explicit joins, bounded loops, typed assertions, and opt-in native distributed workers |
 | Engine | Constant/ramping VUs, constant/ramping arrival rate, graceful stop, RPS cap, timeouts, max connections, keep-alive reuse |
-| Metrics | RPS, aggregate and request-step counts, latency percentiles, transport failures, typed assertion failures, dropped iterations, and HTTP status diagnostics |
+| Metrics | RPS, aggregate/request-step/branch-route counts, latency percentiles, transport failures, typed assertion failures, dropped iterations, and HTTP status diagnostics |
 | Reports | Completed-run JSON export with per-step diagnostics, SLO pass/fail, local baseline comparison, and sensitive-data redaction |
 | Interop | Native headless CI runner plus k6 JavaScript export with thresholds and environment-bound secrets |
 | Releases | macOS notarization, Windows Authenticode, Sigstore bundles, checksums, SPDX SBOMs, and build provenance |
@@ -124,10 +124,11 @@ overestimation above 1µs through the maximum 5-minute request timeout. P95 and 
 `insufficient` below 20 and 100 latency samples respectively, the minimum samples needed to resolve one
 observation in each percentile tail; this is a rank-resolution guard, not a statistical confidence interval.
 
-Scenario graphs compile as one deterministic directed path in `O(nodes + edges)` time before preflight or k6
-export. Multiple requests are supported on that path; cycles, disconnected components, branches, merges, and
-ambiguous Engine, Metrics, or Window control nodes are rejected with node-specific errors. The resolved path is
-shown above the canvas and does not depend on React node or edge array order.
+Scenario graphs compile into either the existing linear path or a schema-v1 execution plan. Branch nodes select
+weighted routes deterministically from the VU, iteration, and branch ID; every route must converge at its declared
+Join without merging early. Route-local variables are discarded at Join, while run-scoped values persist only for
+later selections of the same route. Loop nodes require an explicit body back-edge and a 1-1,000 iteration bound.
+Arbitrary cycles, nested loops, disconnected components, and ambiguous control nodes are rejected before preflight.
 
 Request templates are parsed into literal and variable segments during configuration compilation. Each worker
 reuses one render buffer after warm-up; buffers above 64 KiB are released after the request. Static requests
@@ -148,6 +149,8 @@ k6's `rps` option for VU profiles so multi-request scenarios retain a
 request-level limit; k6 [discourages this option](https://grafana.com/docs/k6/latest/using-k6/k6-options/reference/#rps)
 and applies it once per load generator, so distributed or cloud runs multiply the effective cap. k6 also
 samples every request and has no direct equivalent for FlowRoutine connection buffers or response-size limits.
+Branch/Join/Loop plans are rejected by k6 export instead of being silently flattened; use the native desktop,
+headless, or distributed engine for those plans.
 
 ## Architecture
 
@@ -253,12 +256,12 @@ Load testing can disrupt real services. FlowRoutine includes RPS caps, ramp-up c
 
 ## Roadmap
 
-- Support branching and multiple scenario paths.
 - Improve packaged desktop builds for macOS, Windows, and Linux.
 
 ## Current Limits
 
-- Graph execution follows one selected linear scenario path.
+- Nested loops are intentionally unsupported; each loop must have a statically bounded body and exit.
+- k6 export currently supports linear scenarios only.
 - Native distributed execution is currently exposed through the Go coordinator API; desktop runs remain local-only.
 - The desktop app does not install updates automatically; signed metadata defines an explicit opt-in protocol for a future client.
 - Environment and auth secret values are memory-only and are not saved in profiles or recent-run history.

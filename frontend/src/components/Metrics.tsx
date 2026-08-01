@@ -3,7 +3,7 @@ import { Activity, AlertTriangle, CheckCircle2, Download, Gauge, ListChecks, Min
 import { downloadRunReport, type BaselineComparison, type QualityGateResult } from "../report";
 import { useMetricsStore } from "../store";
 import type { MetricHistoryPoint } from "../metricHistory";
-import type { MetricsBatch, RequestStepMetrics, StatusCodeCount } from "../types";
+import type { BranchRouteMetrics, MetricsBatch, RequestStepMetrics, StatusCodeCount } from "../types";
 import { formatBytes, formatNumber } from "../format";
 
 export const MetricGrid = memo(function MetricGrid() {
@@ -166,6 +166,8 @@ export const StatusDetailsDialog = memo(function StatusDetailsDialog({
 }) {
   const statusCodes = batch?.statusCodes ?? [];
   const stepMetrics = [...(batch?.stepMetrics ?? [])].sort(compareRequestSteps);
+  const branchMetrics = [...(batch?.branchMetrics ?? [])].sort((left, right) =>
+    left.branchId.localeCompare(right.branchId) || left.routeId.localeCompare(right.routeId));
   const total = batch?.total ?? 0;
   return (
     <div className="modal-backdrop" role="presentation">
@@ -216,8 +218,39 @@ export const StatusDetailsDialog = memo(function StatusDetailsDialog({
             </div>
           )}
         </div>
+        {branchMetrics.length > 0 ? (
+          <div className="request-step-section">
+            <div className="request-step-heading">
+              <h3>Branch routes</h3>
+              <small>Deterministic selections and reconciled request totals</small>
+            </div>
+            <div className="request-step-list">
+              <div className="request-step-row request-step-header">
+                <span>Route</span>
+                <span>Selections</span>
+                <span>Requests</span>
+                <span>Failures</span>
+              </div>
+              {branchMetrics.map((route) => <BranchRouteRow key={`${route.branchId}:${route.routeId}`} route={route} />)}
+            </div>
+          </div>
+        ) : null}
         <button type="button" className="secondary" onClick={onClose}>Close</button>
       </div>
+    </div>
+  );
+});
+
+const BranchRouteRow = memo(function BranchRouteRow({ route }: { route: BranchRouteMetrics }) {
+  return (
+    <div className={`request-step-row${route.failed > 0 ? " request-step-row-failing" : ""}`}>
+      <div>
+        <strong>{route.name || route.routeId}</strong>
+        <small>{route.branchId} · {route.routeId}</small>
+      </div>
+      <span>{formatNumber(route.selections)}</span>
+      <span>{formatNumber(route.total)}</span>
+      <span>{formatNumber(route.failed)}</span>
     </div>
   );
 });

@@ -40,6 +40,32 @@ export type LoadConfig = {
   rampUpMs: number;
   profile?: LoadProfile;
   scenarioSteps: ScenarioStep[];
+  executionPlan?: ExecutionPlan;
+};
+
+export type ExecutionPlan = {
+  schemaVersion: 1;
+  entryStepId: string;
+  steps: ExecutionPlanStep[];
+};
+
+export type ExecutionPlanStep = {
+  id: string;
+  kind: "step" | "branch" | "join" | "loop";
+  nextStepId?: string;
+  requestStepId?: string;
+  routes?: ExecutionRoute[];
+  joinStepId?: string;
+  bodyStepId?: string;
+  exitStepId?: string;
+  maxIterations?: number;
+};
+
+export type ExecutionRoute = {
+  id: string;
+  name?: string;
+  targetStepId: string;
+  weight: number;
 };
 
 export type ScenarioStep = {
@@ -151,6 +177,17 @@ export type MetricsBatch = {
   bytesWritten: number;
   statusCodes: StatusCodeCount[];
   stepMetrics?: RequestStepMetrics[];
+  branchMetrics?: BranchRouteMetrics[];
+};
+
+export type BranchRouteMetrics = {
+  branchId: string;
+  routeId: string;
+  name: string;
+  selections: number;
+  total: number;
+  success: number;
+  failed: number;
 };
 
 export type RequestStepMetrics = {
