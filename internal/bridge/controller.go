@@ -13,8 +13,9 @@ import (
 var ErrControllerNotStarted = errors.New("bridge controller has no active engine")
 
 type StartRequest struct {
-	Config          LoadConfig `json:"config"`
-	BatchIntervalMS int        `json:"batchIntervalMs"`
+	Config          LoadConfig        `json:"config"`
+	BatchIntervalMS int               `json:"batchIntervalMs"`
+	RuntimeBindings map[string]string `json:"-"`
 }
 
 type StartResponse struct {
@@ -188,7 +189,7 @@ func (c *Controller) Start(ctx context.Context, req StartRequest) (StartResponse
 	}
 	c.mu.Unlock()
 
-	e, err := newEngine(req.Config.toEngineConfig())
+	e, err := newEngine(req.Config.toEngineConfigWithRuntime(req.RuntimeBindings))
 	if err != nil {
 		c.rollbackStart(transitionDone, nil, nil)
 		return StartResponse{}, err
@@ -327,6 +328,10 @@ func stopEngine(e *engine.Engine) error {
 }
 
 func (c LoadConfig) toEngineConfig() engine.Config {
+	return c.toEngineConfigWithRuntime(nil)
+}
+
+func (c LoadConfig) toEngineConfigWithRuntime(runtimeBindings map[string]string) engine.Config {
 	headers := make([]engine.Header, 0, len(c.Headers))
 	for _, h := range c.Headers {
 		headers = append(headers, engine.Header{Name: h.Name, Value: h.Value})
@@ -405,7 +410,19 @@ func (c LoadConfig) toEngineConfig() engine.Config {
 		RampUp:            time.Duration(c.RampUpMS) * time.Millisecond,
 		Profile:           profile,
 		ScenarioSteps:     steps,
+		RuntimeVariables:  cloneRuntimeBindings(runtimeBindings),
 	}
+}
+
+func cloneRuntimeBindings(bindings map[string]string) map[string]string {
+	if len(bindings) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(bindings))
+	for name, value := range bindings {
+		cloned[name] = value
+	}
+	return cloned
 }
 
 func snapshotResponse(snapshot engine.Snapshot, steps []engine.RequestStepSnapshot) SnapshotResponse {
