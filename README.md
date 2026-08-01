@@ -31,6 +31,7 @@ Built with OpenAI Codex assistance.
 - **SLO gates**: Configure failure-rate, latency, and RPS thresholds on the Metrics node and get pass/fail results locally or in exported k6 scripts.
 - **Regression awareness**: Completed runs are compared with the previous local baseline for the same scenario to flag RPS, latency, and failure-rate changes.
 - **k6 handoff**: Export visual scenarios to k6 JavaScript for CI runs or distributed execution outside the desktop app.
+- **Verifiable releases**: Tagged builds publish native signatures, SHA-256 checksums, an SPDX SBOM, provenance, and Sigstore bundles.
 - **Privacy-first workflow**: Scenario data, target URLs, auth values, and metrics are handled locally instead of being uploaded to a FlowRoutine cloud service.
 
 ## Quick Start
@@ -61,6 +62,7 @@ go build ./...
 | Metrics | RPS, aggregate and request-step counts, latency percentiles, transport failures, typed assertion failures, dropped iterations, and HTTP status diagnostics |
 | Reports | Completed-run JSON export with per-step diagnostics, SLO pass/fail, local baseline comparison, and sensitive-data redaction |
 | Interop | k6 JavaScript export with thresholds and sensitive headers mapped to environment variables |
+| Releases | macOS notarization, Windows Authenticode, Sigstore bundles, checksums, SPDX SBOMs, and build provenance |
 | UI | Node help, Korean/English descriptions, adjustable chart window, wheel zoom, edge deletion |
 
 Capture syntax is `name[@iteration|run][:success|any|2xx|200]=JSON.path`. Iteration values reset on every
@@ -178,6 +180,16 @@ go run ./cmd/flowroutine-bench -url https://example.com -duration 5s -warmup 1s 
 
 Benchmark results vary by hardware, OS limits, network path, TLS cost, and target capacity. Treat local results as measurements of that environment, not universal project guarantees.
 
+## Release Security
+
+Version tags are built in isolated GitHub environments. macOS applications are Developer ID signed, notarized, and
+stapled; Windows executables are Authenticode signed. Every packaged artifact, checksum file, SBOM, and update
+manifest also receives a keyless Sigstore bundle bound to this repository's release workflow. The workflow fails
+instead of publishing unsigned native artifacts when a required certificate is unavailable.
+
+Repository environment setup, end-user verification commands, key rotation, and the downgrade-safe opt-in update
+protocol are documented in [Release security](docs/release-security.md).
+
 ## Safety
 
 Load testing can disrupt real services. FlowRoutine includes RPS caps, ramp-up controls, public-target warnings, and duration guardrails, but the operator is responsible for using it safely.
@@ -197,6 +209,7 @@ Load testing can disrupt real services. FlowRoutine includes RPS caps, ramp-up c
 
 - Graph execution follows one selected linear scenario path.
 - Distributed load generation is not implemented.
+- The desktop app does not install updates automatically; signed metadata defines an explicit opt-in protocol for a future client.
 - Environment and auth secret values are memory-only and are not saved in profiles or recent-run history.
 
 ## License
