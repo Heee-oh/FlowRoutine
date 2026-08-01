@@ -1,25 +1,21 @@
 package bridge
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"sort"
 	"strings"
-	"time"
 )
 
-const (
-	openAPIImportTimeout = 5 * time.Second
-	maxOpenAPIBodyBytes  = 5 << 20
-)
-
-var openAPIHTTPClient = http.DefaultClient
+type OpenAPIImportRequest struct {
+	URL                 string `json:"url"`
+	AllowPrivateNetwork bool   `json:"allowPrivateNetwork"`
+	AllowRedirects      bool   `json:"allowRedirects"`
+	AllowExternalRefs   bool   `json:"allowExternalRefs"`
+}
 
 type OpenAPIImportResponse struct {
 	SourceURL string            `json:"sourceUrl"`
@@ -28,7 +24,6 @@ type OpenAPIImportResponse struct {
 	Version   string            `json:"version"`
 	Servers   []OpenAPIServer   `json:"servers"`
 	Endpoints []OpenAPIEndpoint `json:"endpoints"`
-	RawJSON   json.RawMessage   `json:"rawJson"`
 }
 
 type OpenAPIServer struct {
@@ -62,73 +57,21 @@ type OpenAPIParameter struct {
 	Sample      string `json:"sample"`
 }
 
-func (c *Controller) ImportOpenAPI(ctx context.Context, rawURL string) (OpenAPIImportResponse, error) {
-	endpoint, err := validateOpenAPIURL(rawURL)
-	if err != nil {
-		return OpenAPIImportResponse{}, err
-	}
+func (c *Controller) ImportOpenAPI(ctx context.Context, request OpenAPIImportRequest) (OpenAPIImportResponse, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(ctx, openAPIImportTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	sourceURL, doc, err := loadOpenAPIDocument(ctx, request)
 	if err != nil {
 		return OpenAPIImportResponse{}, err
 	}
-	req.Header.Set("Accept", "application/json, application/yaml;q=0.8, */*;q=0.1")
-
-	resp, err := openAPIHTTPClient.Do(req)
-	if err != nil {
-		return OpenAPIImportResponse{}, fmt.Errorf("fetch OpenAPI document: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return OpenAPIImportResponse{}, fmt.Errorf("fetch OpenAPI document: HTTP %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOpenAPIBodyBytes+1))
-	if err != nil {
-		return OpenAPIImportResponse{}, fmt.Errorf("read OpenAPI document: %w", err)
-	}
-	if len(body) > maxOpenAPIBodyBytes {
-		return OpenAPIImportResponse{}, fmt.Errorf("OpenAPI document is larger than %d bytes", maxOpenAPIBodyBytes)
-	}
-
-	return parseOpenAPIMetadata(endpoint, body)
+	return parseOpenAPIMetadata(sourceURL, doc)
 }
 
-func validateOpenAPIURL(rawURL string) (string, error) {
-	trimmed := strings.TrimSpace(rawURL)
-	if trimmed == "" {
-		return "", errors.New("OpenAPI URL is required")
-	}
-	parsed, err := url.Parse(trimmed)
-	if err != nil {
-		return "", fmt.Errorf("invalid OpenAPI URL: %w", err)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", errors.New("OpenAPI URL must use http or https")
-	}
-	if parsed.Host == "" {
-		return "", errors.New("OpenAPI URL requires a host")
-	}
-	if parsed.User != nil {
-		return "", errors.New("OpenAPI URL must not include credentials")
-	}
-	return parsed.String(), nil
-}
-
-func parseOpenAPIMetadata(sourceURL string, body []byte) (OpenAPIImportResponse, error) {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-
-	var doc map[string]any
-	if err := decoder.Decode(&doc); err != nil {
-		return OpenAPIImportResponse{}, fmt.Errorf("OpenAPI document must be JSON: %w", err)
-	}
+func parseOpenAPIMetadata(sourceURL string, doc map[string]any) (OpenAPIImportResponse, error) {
 	if len(doc) == 0 {
 		return OpenAPIImportResponse{}, errors.New("OpenAPI document is empty")
 	}
@@ -152,7 +95,6 @@ func parseOpenAPIMetadata(sourceURL string, body []byte) (OpenAPIImportResponse,
 	servers := parseOpenAPIServers(doc, sourceURL)
 	endpoints := parseOpenAPIEndpoints(doc, paths, servers)
 
-	rawJSON := json.RawMessage(bytes.TrimSpace(body))
 	return OpenAPIImportResponse{
 		SourceURL: sourceURL,
 		OpenAPI:   firstNonEmpty(openAPIVersion, swaggerVersion),
@@ -160,7 +102,6 @@ func parseOpenAPIMetadata(sourceURL string, body []byte) (OpenAPIImportResponse,
 		Version:   version,
 		Servers:   servers,
 		Endpoints: endpoints,
-		RawJSON:   rawJSON,
 	}, nil
 }
 

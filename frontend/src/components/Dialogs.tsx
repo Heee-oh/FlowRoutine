@@ -3,7 +3,12 @@ import type { HelpLanguage, HelpTopic } from "../help";
 import { helpDialogTitle, nodeHelpItems, overviewHelpItems } from "../help";
 import { nodePalette } from "../flowModel";
 import type { SafetyAssessment } from "../flowTypes";
-import type { OpenAPIEndpoint, OpenAPIImportResponse, StartRequest } from "../types";
+import type {
+  OpenAPIEndpoint,
+  OpenAPIImportRequest,
+  OpenAPIImportResponse,
+  StartRequest,
+} from "../types";
 import { formatBytes, formatNumber } from "../format";
 
 export const HelpDialog = memo(function HelpDialog({
@@ -113,9 +118,12 @@ export const OpenAPIImportDialog = memo(function OpenAPIImportDialog({
   message: string;
   onCancel: () => void;
   onSelectEndpoint: (endpoint: OpenAPIEndpoint) => void;
-  onSubmit: (url: string) => void | Promise<void>;
+  onSubmit: (request: OpenAPIImportRequest) => void | Promise<void>;
 }) {
   const [url, setUrl] = useState("http://localhost:8080/v3/api-docs");
+  const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(false);
+  const [allowRedirects, setAllowRedirects] = useState(false);
+  const [allowExternalRefs, setAllowExternalRefs] = useState(false);
   const [query, setQuery] = useState("");
   const trimmedUrl = url.trim();
   const normalizedQuery = query.trim().toLowerCase();
@@ -145,7 +153,12 @@ export const OpenAPIImportDialog = memo(function OpenAPIImportDialog({
         onSubmit={(event) => {
           event.preventDefault();
           if (trimmedUrl) {
-            onSubmit(trimmedUrl);
+            onSubmit({
+              url: trimmedUrl,
+              allowPrivateNetwork,
+              allowRedirects,
+              allowExternalRefs,
+            });
           }
         }}
       >
@@ -154,7 +167,7 @@ export const OpenAPIImportDialog = memo(function OpenAPIImportDialog({
           <h2 id="openapi-import-title">OpenAPI / Swagger</h2>
         </div>
         <label className="field-stack">
-          <span>OpenAPI JSON URL</span>
+          <span>OpenAPI JSON or YAML URL</span>
           <input
             autoFocus
             type="url"
@@ -163,6 +176,42 @@ export const OpenAPIImportDialog = memo(function OpenAPIImportDialog({
             onChange={(event) => setUrl(event.target.value)}
           />
         </label>
+        <fieldset className="import-consent-list">
+          <legend>Network access</legend>
+          <label className="import-consent">
+            <input
+              type="checkbox"
+              checked={allowPrivateNetwork}
+              onChange={(event) => setAllowPrivateNetwork(event.target.checked)}
+            />
+            <span>
+              Allow private-network addresses
+              <small>Required for localhost, loopback, and private IP ranges.</small>
+            </span>
+          </label>
+          <label className="import-consent">
+            <input
+              type="checkbox"
+              checked={allowRedirects}
+              onChange={(event) => setAllowRedirects(event.target.checked)}
+            />
+            <span>
+              Follow HTTP redirects
+              <small>Every redirect destination is checked against the same network policy.</small>
+            </span>
+          </label>
+          <label className="import-consent">
+            <input
+              type="checkbox"
+              checked={allowExternalRefs}
+              onChange={(event) => setAllowExternalRefs(event.target.checked)}
+            />
+            <span>
+              Fetch external $ref documents
+              <small>Relative and remote references share bounded document and byte limits.</small>
+            </span>
+          </label>
+        </fieldset>
         {error ? <div className="dialog-error">{error}</div> : null}
         {message ? <div className="dialog-success">{message}</div> : null}
         {imported ? (

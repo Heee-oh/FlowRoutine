@@ -50,6 +50,6 @@ func (a *App) Snapshot() (bridge.SnapshotResponse, error) {
 	return a.controller.Snapshot()
 }
 
-func (a *App) ImportOpenAPI(rawURL string) (bridge.OpenAPIImportResponse, error) {
-	return a.controller.ImportOpenAPI(a.ctx, rawURL)
+func (a *App) ImportOpenAPI(request bridge.OpenAPIImportRequest) (bridge.OpenAPIImportResponse, error) {
+	return a.controller.ImportOpenAPI(a.ctx, request)
 }

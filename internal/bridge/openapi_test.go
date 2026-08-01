@@ -85,7 +85,10 @@ func TestImportOpenAPIFetchesAndValidatesJSON(t *testing.T) {
 		}`), nil
 	})
 
-	got, err := NewController(nil).ImportOpenAPI(context.Background(), "http://localhost:8080/v3/api-docs")
+	got, err := NewController(nil).ImportOpenAPI(
+		context.Background(),
+		openAPIRequest("http://localhost:8080/v3/api-docs"),
+	)
 	if err != nil {
 		t.Fatalf("ImportOpenAPI returned error: %v", err)
 	}
@@ -100,9 +103,6 @@ func TestImportOpenAPIFetchesAndValidatesJSON(t *testing.T) {
 	}
 	if got.Version != "1.0.0" {
 		t.Fatalf("Version = %q, want 1.0.0", got.Version)
-	}
-	if !strings.Contains(string(got.RawJSON), `"/users"`) {
-		t.Fatalf("RawJSON does not contain paths: %s", got.RawJSON)
 	}
 	if len(got.Servers) != 1 {
 		t.Fatalf("got %d servers, want 1", len(got.Servers))
@@ -181,7 +181,10 @@ func TestImportOpenAPIUsesDocumentSecurityAndOperationOverride(t *testing.T) {
 		}`), nil
 	})
 
-	got, err := NewController(nil).ImportOpenAPI(context.Background(), "http://localhost:8080/v3/api-docs")
+	got, err := NewController(nil).ImportOpenAPI(
+		context.Background(),
+		openAPIRequest("http://localhost:8080/v3/api-docs"),
+	)
 	if err != nil {
 		t.Fatalf("ImportOpenAPI returned error: %v", err)
 	}
@@ -205,7 +208,10 @@ func TestImportOpenAPIParsesSwaggerSecurityDefinitions(t *testing.T) {
 		}`), nil
 	})
 
-	got, err := NewController(nil).ImportOpenAPI(context.Background(), "http://localhost:8080/v2/api-docs")
+	got, err := NewController(nil).ImportOpenAPI(
+		context.Background(),
+		openAPIRequest("http://localhost:8080/v2/api-docs"),
+	)
 	if err != nil {
 		t.Fatalf("ImportOpenAPI returned error: %v", err)
 	}
@@ -234,7 +240,10 @@ func TestImportOpenAPIParsesPathAndQueryParameters(t *testing.T) {
 		}`), nil
 	})
 
-	got, err := NewController(nil).ImportOpenAPI(context.Background(), "http://localhost:8080/v3/api-docs")
+	got, err := NewController(nil).ImportOpenAPI(
+		context.Background(),
+		openAPIRequest("http://localhost:8080/v3/api-docs"),
+	)
 	if err != nil {
 		t.Fatalf("ImportOpenAPI returned error: %v", err)
 	}
@@ -260,7 +269,10 @@ func TestImportOpenAPIRejectsInvalidURLs(t *testing.T) {
 	controller := NewController(nil)
 	for _, rawURL := range tests {
 		t.Run(rawURL, func(t *testing.T) {
-			if _, err := controller.ImportOpenAPI(context.Background(), rawURL); err == nil {
+			if _, err := controller.ImportOpenAPI(
+				context.Background(),
+				openAPIRequest(rawURL),
+			); err == nil {
 				t.Fatal("expected error")
 			}
 		})
@@ -272,7 +284,10 @@ func TestImportOpenAPIRejectsNonOpenAPIJSON(t *testing.T) {
 		return jsonResponse(http.StatusOK, `{"hello":"world"}`), nil
 	})
 
-	if _, err := NewController(nil).ImportOpenAPI(context.Background(), "http://localhost:8080/v3/api-docs"); err == nil {
+	if _, err := NewController(nil).ImportOpenAPI(
+		context.Background(),
+		openAPIRequest("http://localhost:8080/v3/api-docs"),
+	); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -282,7 +297,10 @@ func TestImportOpenAPIRejectsHTTPError(t *testing.T) {
 		return jsonResponse(http.StatusNotFound, `{"error":"missing"}`), nil
 	})
 
-	if _, err := NewController(nil).ImportOpenAPI(context.Background(), "http://localhost:8080/v3/api-docs"); err == nil {
+	if _, err := NewController(nil).ImportOpenAPI(
+		context.Background(),
+		openAPIRequest("http://localhost:8080/v3/api-docs"),
+	); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -298,7 +316,10 @@ func TestImportOpenAPIParsesSwaggerServers(t *testing.T) {
 		}`), nil
 	})
 
-	got, err := NewController(nil).ImportOpenAPI(context.Background(), "http://localhost:8080/v2/api-docs")
+	got, err := NewController(nil).ImportOpenAPI(
+		context.Background(),
+		openAPIRequest("http://localhost:8080/v2/api-docs"),
+	)
 	if err != nil {
 		t.Fatalf("ImportOpenAPI returned error: %v", err)
 	}
@@ -345,7 +366,10 @@ func TestImportOpenAPIGeneratesBodySampleFromInlineSchema(t *testing.T) {
 		}`), nil
 	})
 
-	got, err := NewController(nil).ImportOpenAPI(context.Background(), "http://localhost:8080/v3/api-docs")
+	got, err := NewController(nil).ImportOpenAPI(
+		context.Background(),
+		openAPIRequest("http://localhost:8080/v3/api-docs"),
+	)
 	if err != nil {
 		t.Fatalf("ImportOpenAPI returned error: %v", err)
 	}
@@ -389,7 +413,10 @@ func TestImportOpenAPIGeneratesBodySampleFromSwaggerBodyParameter(t *testing.T) 
 		}`), nil
 	})
 
-	got, err := NewController(nil).ImportOpenAPI(context.Background(), "http://localhost:8080/v2/api-docs")
+	got, err := NewController(nil).ImportOpenAPI(
+		context.Background(),
+		openAPIRequest("http://localhost:8080/v2/api-docs"),
+	)
 	if err != nil {
 		t.Fatalf("ImportOpenAPI returned error: %v", err)
 	}
@@ -412,7 +439,10 @@ func TestImportOpenAPIHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := NewController(nil).ImportOpenAPI(ctx, "http://localhost:8080/v3/api-docs"); err == nil {
+	if _, err := NewController(nil).ImportOpenAPI(
+		ctx,
+		openAPIRequest("http://localhost:8080/v3/api-docs"),
+	); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -477,4 +507,11 @@ func sameAuth(got OpenAPIAuth, want OpenAPIAuth) bool {
 	gotType := firstNonEmpty(got.Type, "none")
 	wantType := firstNonEmpty(want.Type, "none")
 	return gotType == wantType && got.Name == want.Name
+}
+
+func openAPIRequest(rawURL string) OpenAPIImportRequest {
+	return OpenAPIImportRequest{
+		URL:                 rawURL,
+		AllowPrivateNetwork: true,
+	}
 }

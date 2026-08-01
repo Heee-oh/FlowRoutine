@@ -21,7 +21,7 @@ Built with OpenAI Codex assistance.
 ## Why FlowRoutine
 
 - **Visual scenario editing**: Build request, delay, assertion, engine, metrics, and chart-window nodes on a React Flow canvas.
-- **Postman/OpenAPI/HAR import**: Turn Postman Collection v2 JSON files, OpenAPI endpoints, or browser HAR captures into runnable scenario nodes.
+- **Postman/OpenAPI/HAR import**: Turn Postman Collection v2 JSON files, OpenAPI or Swagger JSON/YAML endpoints, or browser HAR captures into runnable scenario nodes.
 - **Stateful API flows**: Capture JSON response values and reuse them as `{{variables}}` in later request URLs, headers, or bodies.
 - **Local load engine**: Run virtual users locally with goroutines, `fasthttp`, keep-alive reuse, and pooled request/response objects.
 - **Realtime feedback**: Track RPS, latency, failures, status code counts, and bounded live chart data through batched Wails events.
@@ -52,7 +52,7 @@ go build ./...
 | Area | What works |
 | --- | --- |
 | Scenario canvas | Request, Engine, Metrics, Window, Delay, and Assert nodes |
-| Import | OpenAPI / Swagger URL import, Postman Collection v2 JSON import, and browser HAR import |
+| Import | OpenAPI / Swagger JSON or YAML URL import, Postman Collection v2 JSON import, and browser HAR import |
 | Request setup | Method, URL, headers, body, auth helpers, JSON capture variables, and recent run loading |
 | Execution | Linear path execution from Request through Engine, with Delay and Assert support |
 | Engine | Go virtual users, RPS cap, ramp-up, timeouts, max connections, keep-alive reuse |
@@ -73,6 +73,11 @@ Global request limits use one central pacer per engine run across all scenario s
 a single-permit burst and issues one permit every `1 / RPS`; higher rates are emitted in bounded 1ms batches.
 Missed permits are not queued beyond one pacer tick. Saturated one-second tests allow ±20% scheduling
 tolerance; longer runs converge more closely.
+
+OpenAPI imports require separate consent for private-network targets, HTTP redirects, and external `$ref`
+documents. Redirect and reference destinations reuse the same network policy. Imports are capped at 5 MiB
+per document, 20 MiB total, 16 documents, 5 redirects, 64 reference levels, 10,000 references, and 200,000
+resolved nodes; cyclic or unresolved references fail without returning the source document over the bridge.
 
 Engine counters use `min(VUs, 4 × GOMAXPROCS, 256)` stable stripes. Status-code and latency-histogram storage,
 snapshot scans, and reset work therefore stop growing with virtual users after the CPU-scaled stripe cap,
