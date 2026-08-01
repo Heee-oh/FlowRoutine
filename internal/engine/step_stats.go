@@ -9,7 +9,7 @@ import (
 const (
 	maxRequestStepStatsShards           = 4
 	requestStepStatsMetadataBytes       = 64
-	requestStepStatsShardEstimatedBytes = (15+LatencyBucketCount+trackedHTTPStatusCount)*8 + 64
+	requestStepStatsShardEstimatedBytes = (21+LatencyBucketCount+trackedHTTPStatusCount)*8 + 64
 )
 
 type requestStepDescriptor struct {
@@ -24,24 +24,26 @@ type atomicRequestStepStats struct {
 }
 
 type requestStepStatsShard struct {
-	totalRequests     atomic.Uint64
-	successRequests   atomic.Uint64
-	failedRequests    atomic.Uint64
-	timeoutFailures   atomic.Uint64
-	dnsFailures       atomic.Uint64
-	tlsFailures       atomic.Uint64
-	connRefused       atomic.Uint64
-	otherFailures     atomic.Uint64
-	assertionFailures atomic.Uint64
-	captureFailures   atomic.Uint64
-	templateFailures  atomic.Uint64
-	latencySamples    atomic.Uint64
-	totalLatencyNano  atomic.Uint64
-	minLatencyNano    atomic.Uint64
-	maxLatencyNano    atomic.Uint64
-	latencyBuckets    [LatencyBucketCount]atomic.Uint64
-	statusCodes       [trackedHTTPStatusCount]atomic.Uint64
-	_                 [64]byte
+	totalRequests              atomic.Uint64
+	successRequests            atomic.Uint64
+	failedRequests             atomic.Uint64
+	timeoutFailures            atomic.Uint64
+	dnsFailures                atomic.Uint64
+	tlsFailures                atomic.Uint64
+	connRefused                atomic.Uint64
+	otherFailures              atomic.Uint64
+	assertionFailures          atomic.Uint64
+	scenarioAssertionFailures  [assertionTypeCount]atomic.Uint64
+	countOnlyAssertionFailures atomic.Uint64
+	captureFailures            atomic.Uint64
+	templateFailures           atomic.Uint64
+	latencySamples             atomic.Uint64
+	totalLatencyNano           atomic.Uint64
+	minLatencyNano             atomic.Uint64
+	maxLatencyNano             atomic.Uint64
+	latencyBuckets             [LatencyBucketCount]atomic.Uint64
+	statusCodes                [trackedHTTPStatusCount]atomic.Uint64
+	_                          [64]byte
 }
 
 type StepStatusCodeCount struct {
@@ -50,27 +52,28 @@ type StepStatusCodeCount struct {
 }
 
 type RequestStepSnapshot struct {
-	ID                string
-	Name              string
-	TotalRequests     uint64
-	SuccessRequests   uint64
-	FailedRequests    uint64
-	TimeoutFailures   uint64
-	DNSFailures       uint64
-	TLSFailures       uint64
-	ConnRefused       uint64
-	OtherFailures     uint64
-	AssertionFailures uint64
-	CaptureFailures   uint64
-	TemplateFailures  uint64
-	LatencySamples    uint64
-	TotalLatencyNano  uint64
-	MinLatencyNano    uint64
-	MaxLatencyNano    uint64
-	P95LatencyNano    uint64
-	P99LatencyNano    uint64
-	P999LatencyNano   uint64
-	StatusCodes       []StepStatusCodeCount
+	ID                      string
+	Name                    string
+	TotalRequests           uint64
+	SuccessRequests         uint64
+	FailedRequests          uint64
+	TimeoutFailures         uint64
+	DNSFailures             uint64
+	TLSFailures             uint64
+	ConnRefused             uint64
+	OtherFailures           uint64
+	AssertionFailures       uint64
+	AssertionFailuresByType AssertionFailureCounts
+	CaptureFailures         uint64
+	TemplateFailures        uint64
+	LatencySamples          uint64
+	TotalLatencyNano        uint64
+	MinLatencyNano          uint64
+	MaxLatencyNano          uint64
+	P95LatencyNano          uint64
+	P99LatencyNano          uint64
+	P999LatencyNano         uint64
+	StatusCodes             []StepStatusCodeCount
 }
 
 func (s *AtomicStats) initRequestSteps(virtualUsers int, descriptors []requestStepDescriptor) {
@@ -135,6 +138,7 @@ func (s *AtomicStats) RequestStepSnapshots() []RequestStepSnapshot {
 			snapshot.ConnRefused += shard.connRefused.Load()
 			snapshot.OtherFailures += shard.otherFailures.Load()
 			snapshot.AssertionFailures += shard.assertionFailures.Load()
+			addAssertionFailureCounts(&snapshot.AssertionFailuresByType, shard.scenarioAssertionFailureCounts())
 			snapshot.CaptureFailures += shard.captureFailures.Load()
 			snapshot.TemplateFailures += shard.templateFailures.Load()
 			snapshot.LatencySamples += shard.latencySamples.Load()
@@ -187,6 +191,10 @@ func (s *requestStepStatsShard) reset() {
 	s.connRefused.Store(0)
 	s.otherFailures.Store(0)
 	s.assertionFailures.Store(0)
+	for index := range s.scenarioAssertionFailures {
+		s.scenarioAssertionFailures[index].Store(0)
+	}
+	s.countOnlyAssertionFailures.Store(0)
 	s.captureFailures.Store(0)
 	s.templateFailures.Store(0)
 	s.latencySamples.Store(0)
@@ -266,6 +274,28 @@ func (s *requestStepStatsShard) recordFailureKind(failure FailureKind) {
 
 func (s *requestStepStatsShard) RecordAssertionFailure() {
 	s.assertionFailures.Add(1)
+}
+
+func (s *requestStepStatsShard) RecordScenarioAssertionFailure(typeName AssertionType, countOnly bool) {
+	if index := assertionTypeIndex(typeName); index >= 0 {
+		s.scenarioAssertionFailures[index].Add(1)
+	}
+	if countOnly {
+		s.countOnlyAssertionFailures.Add(1)
+		return
+	}
+	s.RecordAssertionFailure()
+}
+
+func (s *requestStepStatsShard) scenarioAssertionFailureCounts() AssertionFailureCounts {
+	return AssertionFailureCounts{
+		Status:          s.scenarioAssertionFailures[0].Load(),
+		Header:          s.scenarioAssertionFailures[1].Load(),
+		JSON:            s.scenarioAssertionFailures[2].Load(),
+		ResponseLatency: s.scenarioAssertionFailures[3].Load(),
+		StepLatency:     s.scenarioAssertionFailures[4].Load(),
+		CountOnly:       s.countOnlyAssertionFailures.Load(),
+	}
 }
 
 func (s *requestStepStatsShard) RecordCaptureFailure() {

@@ -54,9 +54,9 @@ go build ./...
 | Scenario canvas | Request, Engine, Metrics, Window, Delay, and Assert nodes |
 | Import | OpenAPI / Swagger JSON or YAML URL import, Postman Collection v2 JSON import, and browser HAR import |
 | Request setup | Method, URL, headers, body, auth helpers, JSON capture variables, and recent run loading |
-| Execution | Linear path execution from Request through Engine, with Delay and Assert support |
+| Execution | Linear path execution from Request through Engine, with Delay and typed Assert support |
 | Engine | Constant/ramping VUs, constant/ramping arrival rate, graceful stop, RPS cap, timeouts, max connections, keep-alive reuse |
-| Metrics | RPS, aggregate and request-step counts, latency percentiles, transport failures, dropped iterations, and HTTP status diagnostics |
+| Metrics | RPS, aggregate and request-step counts, latency percentiles, transport failures, typed assertion failures, dropped iterations, and HTTP status diagnostics |
 | Reports | Completed-run JSON export with per-step diagnostics, SLO pass/fail, local baseline comparison, and sensitive-data redaction |
 | Interop | k6 JavaScript export with thresholds and sensitive headers mapped to environment variables |
 | UI | Node help, Korean/English descriptions, adjustable chart window, wheel zoom, edge deletion |
@@ -75,6 +75,12 @@ and last samples plus per-bucket RPS, P95, and P99 minimum and maximum excursion
 Each request node keeps a stable step ID with sharded, fixed-size latency and HTTP-status histograms. The engine
 caps step-stat shards at four and scenarios at 512 steps, keeping worst-case step-metric storage below 25 MiB.
 Compact cumulative step summaries are added to realtime events at most once per second and always on completion.
+
+Assert nodes validate status codes, header presence or exact values, typed JSON-path values, response latency,
+or end-to-end request-step latency. Failures are classified by assertion type. Continue records and proceeds,
+Stop ends the current iteration, and Count only records the typed diagnostic without increasing enforced
+assertion failures. Assertions are compiled before a run; response bodies are evaluated in place and are not
+copied per virtual user.
 
 Global request limits use one central pacer per engine run across all scenario steps. Up to 1,000 RPS it keeps
 a single-permit burst and issues one permit every `1 / RPS`; higher rates are emitted in bounded 1ms batches.
@@ -119,7 +125,7 @@ continue to use their compiled byte slices directly and retain the zero-allocati
 
 Exports map all four execution profiles to k6's equivalent `constant-vus`, `ramping-vus`,
 `constant-arrival-rate`, or `ramping-arrival-rate` executor, including stages, worker capacity, graceful stop,
-request timeouts, quality thresholds, captures, and status assertions. FlowRoutine's global request cap maps to
+request timeouts, quality thresholds, captures, typed response assertions, and stop-iteration behavior. FlowRoutine's global request cap maps to
 k6's `rps` option for VU profiles so multi-request scenarios retain a
 request-level limit; k6 [discourages this option](https://grafana.com/docs/k6/latest/using-k6/k6-options/reference/#rps)
 and applies it once per load generator, so distributed or cloud runs multiply the effective cap. k6 also
@@ -172,7 +178,6 @@ Load testing can disrupt real services. FlowRoutine includes RPS caps, ramp-up c
 
 - Add a manual scenario library with named saves beyond recent-run history.
 - Support branching and multiple scenario paths.
-- Add richer assertions for headers, bodies, and latency thresholds.
 - Improve packaged desktop builds for macOS, Windows, and Linux.
 
 ## Current Limits

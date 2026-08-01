@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"flowroutine/internal/engine"
 )
 
 func TestPreflightNormalizesDefaultsAndEstimatesResources(t *testing.T) {
@@ -88,6 +90,40 @@ func TestPreflightAssignsStableStepIdentityAndEstimatesStepMetrics(t *testing.T)
 	}
 	if preflight.Estimate.MemoryBytes == 0 {
 		t.Fatal("expected step metrics in the memory estimate")
+	}
+}
+
+func TestPreflightNormalizesAndMapsRichAssertions(t *testing.T) {
+	request := validPreflightRequest()
+	request.Config.ScenarioSteps = []ScenarioStep{
+		{Kind: "request", URL: request.Config.URL},
+		{
+			Kind: "assert",
+			Assertion: Assertion{
+				Type:        " json ",
+				Operator:    " equals ",
+				JSONPath:    " $.active ",
+				Expected:    "true",
+				ValueType:   " boolean ",
+				FailureMode: " countOnly ",
+			},
+		},
+	}
+
+	preflight, err := preflightStartRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertion := preflight.normalizedConfig.ScenarioSteps[1].Assertion
+	if assertion.Type != "json" || assertion.Operator != "equals" || assertion.JSONPath != "$.active" ||
+		assertion.ValueType != "boolean" || assertion.FailureMode != "countOnly" {
+		t.Fatalf("assertion was not normalized: %+v", assertion)
+	}
+	engineAssertion := preflight.normalizedConfig.toEngineConfig().ScenarioSteps[1].Assertion
+	if engineAssertion.Type != engine.AssertionJSON || engineAssertion.Operator != engine.AssertionEquals ||
+		engineAssertion.JSONPath != "$.active" || engineAssertion.Expected != "true" ||
+		engineAssertion.ValueType != engine.AssertionValueBoolean || engineAssertion.FailureMode != engine.AssertionCountOnly {
+		t.Fatalf("assertion was not mapped to the engine: %+v", engineAssertion)
 	}
 }
 

@@ -1,5 +1,5 @@
 import type { Edge, Node } from "@xyflow/react";
-import type { LoadProfile } from "./types";
+import type { AssertionDefinition, LoadProfile } from "./types";
 
 export type HeaderInputMode = "direct" | "form";
 
@@ -53,6 +53,14 @@ export type FlowNodeData = {
   minRps?: number;
   windowMs?: number;
   expectedStatus?: string;
+  assertionType?: AssertionDefinition["type"];
+  assertionOperator?: NonNullable<AssertionDefinition["operator"]>;
+  assertionHeaderName?: string;
+  assertionJSONPath?: string;
+  assertionExpected?: string;
+  assertionValueType?: NonNullable<AssertionDefinition["valueType"]>;
+  assertionMaxLatencyMs?: number;
+  assertionFailureMode?: NonNullable<AssertionDefinition["failureMode"]>;
   delayMs?: number;
   validationError?: string;
   executionOrder?: number;

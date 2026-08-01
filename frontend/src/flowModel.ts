@@ -11,7 +11,7 @@ import {
   sanitizeSensitiveURL,
   sanitizeStructuredBody,
 } from "./secretSanitization";
-import type { Capture, Header, LoadConfig, OpenAPIEndpoint, PreflightResponse, ScenarioStep, StartRequest } from "./types";
+import type { AssertionDefinition, Capture, Header, LoadConfig, OpenAPIEndpoint, PreflightResponse, ScenarioStep, StartRequest } from "./types";
 import type {
   FlowNodeData,
   FlowNodeKind,
@@ -200,8 +200,7 @@ export function refreshNodeDisplay(node: Node<FlowNodeData>): Node<FlowNodeData>
       }
       break;
     case "assertion":
-      data.value = stringValue(data.expectedStatus, "2xx");
-      data.caption = "status check";
+      ({ value: data.value, caption: data.caption } = assertionDisplay(data));
       break;
     case "delay":
       data.value = `${numberValue(data.delayMs, 0)} ms`;
@@ -435,7 +434,15 @@ function nodeTemplate(kind: FlowNodeKind, settings: Partial<FlowNodeData> | null
         value: "2xx",
         caption: "status check",
         tone: "assertion",
-        expectedStatus: "2xx",
+        expectedStatus: settings?.expectedStatus ?? "2xx",
+        assertionType: settings?.assertionType ?? "status",
+        assertionOperator: settings?.assertionOperator ?? "equals",
+        assertionHeaderName: settings?.assertionHeaderName ?? "Content-Type",
+        assertionJSONPath: settings?.assertionJSONPath ?? "$.data.id",
+        assertionExpected: settings?.assertionExpected ?? "",
+        assertionValueType: settings?.assertionValueType ?? "string",
+        assertionMaxLatencyMs: settings?.assertionMaxLatencyMs ?? 500,
+        assertionFailureMode: settings?.assertionFailureMode ?? "continue",
       };
     case "delay":
       return {
@@ -573,12 +580,86 @@ function nodeToScenarioStep(node: Node<FlowNodeData>, authSecrets: Record<string
     case "assertion":
       return {
         id: node.id,
-        name: "Assert status",
-        kind: "assertStatus",
-        expectedStatus: stringValue(node.data.expectedStatus, "2xx"),
+        name: assertionStepName(node.data),
+        kind: "assert",
+        assertion: assertionFromNode(node.data),
       };
     default:
       return null;
+  }
+}
+
+function assertionFromNode(data: FlowNodeData): AssertionDefinition {
+  const type = data.assertionType ?? "status";
+  const failureMode = data.assertionFailureMode ?? "continue";
+  switch (type) {
+    case "status":
+      return {
+        type,
+        expected: stringValue(data.expectedStatus, "2xx"),
+        failureMode,
+      };
+    case "header":
+      return {
+        type,
+        operator: data.assertionOperator ?? "exists",
+        headerName: stringValue(data.assertionHeaderName, "Content-Type"),
+        expected: stringValue(data.assertionExpected, ""),
+        failureMode,
+      };
+    case "json":
+      return {
+        type,
+        operator: data.assertionOperator ?? "equals",
+        jsonPath: stringValue(data.assertionJSONPath, "$.data.id"),
+        expected: stringValue(data.assertionExpected, ""),
+        valueType: data.assertionValueType ?? "string",
+        failureMode,
+      };
+    case "responseLatency":
+    case "stepLatency":
+      return {
+        type,
+        maxLatencyMs: numberValue(data.assertionMaxLatencyMs, 500),
+        failureMode,
+      };
+  }
+}
+
+function assertionStepName(data: FlowNodeData) {
+  switch (data.assertionType ?? "status") {
+    case "status":
+      return "Assert status";
+    case "header":
+      return "Assert header";
+    case "json":
+      return "Assert JSON";
+    case "responseLatency":
+      return "Assert response latency";
+    case "stepLatency":
+      return "Assert step latency";
+  }
+}
+
+function assertionDisplay(data: FlowNodeData) {
+  const mode = data.assertionFailureMode ?? "continue";
+  switch (data.assertionType ?? "status") {
+    case "status":
+      return { value: stringValue(data.expectedStatus, "2xx"), caption: `status · ${mode}` };
+    case "header":
+      return {
+        value: stringValue(data.assertionHeaderName, "Content-Type"),
+        caption: `header ${data.assertionOperator ?? "exists"} · ${mode}`,
+      };
+    case "json":
+      return {
+        value: stringValue(data.assertionJSONPath, "$.data.id"),
+        caption: `JSON ${data.assertionOperator ?? "equals"} · ${mode}`,
+      };
+    case "responseLatency":
+      return { value: `≤ ${numberValue(data.assertionMaxLatencyMs, 500)} ms`, caption: `response latency · ${mode}` };
+    case "stepLatency":
+      return { value: `≤ ${numberValue(data.assertionMaxLatencyMs, 500)} ms`, caption: `step latency · ${mode}` };
   }
 }
 

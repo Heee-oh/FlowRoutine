@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"strconv"
@@ -22,6 +23,8 @@ const (
 	MaxScenarioSteps         = 512
 	MaxScenarioStepIDBytes   = 128
 	MaxScenarioStepNameBytes = 256
+	MaxAssertionSubjectBytes = 1_024
+	MaxAssertionValueBytes   = 4_096
 )
 
 type Header struct {
@@ -53,8 +56,54 @@ type StepKind string
 const (
 	StepRequest      StepKind = "request"
 	StepDelay        StepKind = "delay"
+	StepAssert       StepKind = "assert"
 	StepAssertStatus StepKind = "assertStatus"
 )
+
+type AssertionType string
+
+const (
+	AssertionStatus          AssertionType = "status"
+	AssertionHeader          AssertionType = "header"
+	AssertionJSON            AssertionType = "json"
+	AssertionResponseLatency AssertionType = "responseLatency"
+	AssertionStepLatency     AssertionType = "stepLatency"
+)
+
+type AssertionOperator string
+
+const (
+	AssertionExists AssertionOperator = "exists"
+	AssertionEquals AssertionOperator = "equals"
+)
+
+type AssertionValueType string
+
+const (
+	AssertionValueString  AssertionValueType = "string"
+	AssertionValueNumber  AssertionValueType = "number"
+	AssertionValueBoolean AssertionValueType = "boolean"
+	AssertionValueNull    AssertionValueType = "null"
+)
+
+type AssertionFailureMode string
+
+const (
+	AssertionContinue  AssertionFailureMode = "continue"
+	AssertionStop      AssertionFailureMode = "stop"
+	AssertionCountOnly AssertionFailureMode = "countOnly"
+)
+
+type Assertion struct {
+	Type        AssertionType
+	Operator    AssertionOperator
+	HeaderName  string
+	JSONPath    string
+	Expected    string
+	ValueType   AssertionValueType
+	MaxLatency  time.Duration
+	FailureMode AssertionFailureMode
+}
 
 type ScenarioStep struct {
 	ID             string
@@ -66,6 +115,7 @@ type ScenarioStep struct {
 	Body           []byte
 	Delay          time.Duration
 	ExpectedStatus string
+	Assertion      Assertion
 	Captures       []VariableCapture
 }
 
@@ -104,6 +154,7 @@ type compiledConfig struct {
 	profile           compiledLoadProfile
 	steps             []compiledStep
 	clients           []compiledClient
+	assertionCount    int
 }
 
 type compiledHeader struct {
@@ -117,16 +168,16 @@ type compiledStepKind uint8
 const (
 	compiledRequest compiledStepKind = iota
 	compiledDelay
-	compiledAssertStatus
+	compiledAssert
 )
 
 type compiledStep struct {
-	id             string
-	name           string
-	kind           compiledStepKind
-	request        compiledRequestStep
-	delay          time.Duration
-	expectedStatus string
+	id        string
+	name      string
+	kind      compiledStepKind
+	request   compiledRequestStep
+	delay     time.Duration
+	assertion compiledAssertion
 }
 
 type compiledRequestStep struct {
@@ -142,6 +193,21 @@ type compiledRequestStep struct {
 	requestBytes       int
 	captures           []compiledVariableCapture
 	templateNames      []string
+	assertions         []compiledAssertion
+}
+
+type compiledAssertion struct {
+	typeName        AssertionType
+	operator        AssertionOperator
+	headerName      []byte
+	jsonPath        []string
+	expectedString  string
+	expectedNumber  float64
+	expectedBoolean bool
+	valueType       AssertionValueType
+	maxLatency      time.Duration
+	failureMode     AssertionFailureMode
+	resultIndex     int
 }
 
 type compiledVariableCapture struct {
@@ -248,6 +314,7 @@ func compileConfig(cfg Config) (compiledConfig, error) {
 		profile:           profile,
 		steps:             steps,
 		clients:           clients,
+		assertionCount:    compiledAssertionCount(steps),
 	}, nil
 }
 
@@ -277,6 +344,8 @@ func compileScenarioSteps(cfg Config, defaultMethod string) ([]compiledStep, []c
 	clients := make([]compiledClient, 0, len(steps))
 	compiled := make([]compiledStep, 0, len(steps))
 	requestIndex := 0
+	lastRequestIndex := -1
+	assertionResultIndex := 0
 	for index, step := range steps {
 		id, name, err := compileScenarioStepIdentity(step, index)
 		if err != nil {
@@ -329,24 +398,196 @@ func compileScenarioSteps(cfg Config, defaultMethod string) ([]compiledStep, []c
 			}
 			nextCompiled.kind = compiledRequest
 			nextCompiled.request = request
+			lastRequestIndex = len(compiled)
 		case StepDelay:
 			if step.Delay < 0 {
 				return nil, nil, fmt.Errorf("delay must be >= 0: %s", step.Delay)
 			}
 			nextCompiled.kind = compiledDelay
 			nextCompiled.delay = step.Delay
-		case StepAssertStatus:
-			if step.ExpectedStatus == "" {
-				return nil, nil, errors.New("assert status step requires expected status")
+		case StepAssert, StepAssertStatus:
+			if lastRequestIndex < 0 {
+				return nil, nil, fmt.Errorf("scenario step %d assertion requires an earlier request step", index+1)
 			}
-			nextCompiled.kind = compiledAssertStatus
-			nextCompiled.expectedStatus = step.ExpectedStatus
+			assertion, err := compileAssertion(step)
+			if err != nil {
+				return nil, nil, fmt.Errorf("scenario step %d assertion: %w", index+1, err)
+			}
+			assertion.resultIndex = assertionResultIndex
+			assertionResultIndex++
+			compiled[lastRequestIndex].request.assertions = append(
+				compiled[lastRequestIndex].request.assertions,
+				assertion,
+			)
+			nextCompiled.kind = compiledAssert
+			nextCompiled.assertion = assertion
 		default:
 			return nil, nil, fmt.Errorf("unsupported scenario step kind: %s", step.Kind)
 		}
 		compiled = append(compiled, nextCompiled)
 	}
 	return compiled, clients, nil
+}
+
+func compiledAssertionCount(steps []compiledStep) int {
+	count := 0
+	for index := range steps {
+		if steps[index].kind == compiledAssert {
+			count++
+		}
+	}
+	return count
+}
+
+func compileAssertion(step ScenarioStep) (compiledAssertion, error) {
+	definition := step.Assertion
+	if step.Kind == StepAssertStatus {
+		definition.Type = AssertionStatus
+		definition.Expected = step.ExpectedStatus
+	}
+	definition.Type = AssertionType(strings.TrimSpace(string(definition.Type)))
+	if definition.Type == "" {
+		definition.Type = AssertionStatus
+	}
+	definition.Operator = AssertionOperator(strings.TrimSpace(string(definition.Operator)))
+	definition.FailureMode = AssertionFailureMode(strings.TrimSpace(string(definition.FailureMode)))
+	if definition.FailureMode == "" {
+		definition.FailureMode = AssertionContinue
+	}
+	if definition.FailureMode != AssertionContinue &&
+		definition.FailureMode != AssertionStop &&
+		definition.FailureMode != AssertionCountOnly {
+		return compiledAssertion{}, fmt.Errorf(
+			"failure mode must be %q, %q, or %q",
+			AssertionContinue,
+			AssertionStop,
+			AssertionCountOnly,
+		)
+	}
+
+	compiled := compiledAssertion{
+		typeName:    definition.Type,
+		operator:    definition.Operator,
+		failureMode: definition.FailureMode,
+	}
+	switch definition.Type {
+	case AssertionStatus:
+		expected := strings.ToLower(strings.TrimSpace(definition.Expected))
+		if !validExpectedStatus(expected) {
+			return compiledAssertion{}, errors.New("expected status must be a code from 100 to 599 or a class such as 2xx")
+		}
+		compiled.operator = AssertionEquals
+		compiled.expectedString = expected
+	case AssertionHeader:
+		headerName := strings.TrimSpace(definition.HeaderName)
+		if err := validateAssertionText("header name", headerName, MaxAssertionSubjectBytes); err != nil {
+			return compiledAssertion{}, err
+		}
+		if !validAssertionHeaderName(headerName) {
+			return compiledAssertion{}, errors.New("header name contains an invalid HTTP token character")
+		}
+		if compiled.operator == "" {
+			compiled.operator = AssertionExists
+		}
+		if compiled.operator != AssertionExists && compiled.operator != AssertionEquals {
+			return compiledAssertion{}, errors.New("header operator must be exists or equals")
+		}
+		if len(definition.Expected) > MaxAssertionValueBytes {
+			return compiledAssertion{}, fmt.Errorf("expected header value must be at most %d bytes", MaxAssertionValueBytes)
+		}
+		compiled.headerName = []byte(headerName)
+		compiled.expectedString = definition.Expected
+	case AssertionJSON:
+		path := strings.TrimSpace(definition.JSONPath)
+		if err := validateAssertionText("JSON path", path, MaxAssertionSubjectBytes); err != nil {
+			return compiledAssertion{}, err
+		}
+		segments, err := parseJSONPath(path)
+		if err != nil {
+			return compiledAssertion{}, fmt.Errorf("JSON path %q: %w", path, err)
+		}
+		compiled.jsonPath = segments
+		if compiled.operator == "" {
+			compiled.operator = AssertionEquals
+		}
+		if compiled.operator != AssertionExists && compiled.operator != AssertionEquals {
+			return compiledAssertion{}, errors.New("JSON operator must be exists or equals")
+		}
+		compiled.valueType = definition.ValueType
+		if compiled.operator == AssertionEquals {
+			if compiled.valueType == "" {
+				compiled.valueType = AssertionValueString
+			}
+			if len(definition.Expected) > MaxAssertionValueBytes {
+				return compiledAssertion{}, fmt.Errorf("expected JSON value must be at most %d bytes", MaxAssertionValueBytes)
+			}
+			switch compiled.valueType {
+			case AssertionValueString:
+				compiled.expectedString = definition.Expected
+			case AssertionValueNumber:
+				value, err := strconv.ParseFloat(strings.TrimSpace(definition.Expected), 64)
+				if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+					return compiledAssertion{}, errors.New("expected JSON number must be finite")
+				}
+				compiled.expectedNumber = value
+			case AssertionValueBoolean:
+				value, err := strconv.ParseBool(strings.TrimSpace(definition.Expected))
+				if err != nil {
+					return compiledAssertion{}, errors.New("expected JSON boolean must be true or false")
+				}
+				compiled.expectedBoolean = value
+			case AssertionValueNull:
+			default:
+				return compiledAssertion{}, errors.New("JSON value type must be string, number, boolean, or null")
+			}
+		}
+	case AssertionResponseLatency, AssertionStepLatency:
+		if definition.MaxLatency <= 0 {
+			return compiledAssertion{}, errors.New("maximum latency must be greater than zero")
+		}
+		compiled.maxLatency = definition.MaxLatency
+	default:
+		return compiledAssertion{}, fmt.Errorf("unsupported type %q", definition.Type)
+	}
+	return compiled, nil
+}
+
+func validateAssertionText(field string, value string, maximum int) error {
+	if value == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%s must be valid UTF-8", field)
+	}
+	if len(value) > maximum {
+		return fmt.Errorf("%s must be at most %d bytes", field, maximum)
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return fmt.Errorf("%s contains a control character", field)
+		}
+	}
+	return nil
+}
+
+func validExpectedStatus(value string) bool {
+	if len(value) == 3 && value[0] >= '1' && value[0] <= '5' && value[1:] == "xx" {
+		return true
+	}
+	if len(value) != 3 {
+		return false
+	}
+	code, err := strconv.Atoi(value)
+	return err == nil && code >= 100 && code <= 599
+}
+
+func validAssertionHeaderName(value string) bool {
+	for _, character := range value {
+		if character <= 0x20 || character >= 0x7f || strings.ContainsRune("()<>@,;:\\\"/[]?={}", character) {
+			return false
+		}
+	}
+	return value != ""
 }
 
 func compileScenarioStepIdentity(step ScenarioStep, index int) (string, string, error) {

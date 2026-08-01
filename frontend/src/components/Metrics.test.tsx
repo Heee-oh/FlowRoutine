@@ -13,6 +13,14 @@ describe("request-step metrics", () => {
           total: 12,
           success: 10,
           failed: 2,
+          assertionFailuresByType: {
+            status: 0,
+            header: 1,
+            json: 0,
+            responseLatency: 0,
+            stepLatency: 0,
+            countOnly: 1,
+          },
           stepMetrics: [
             stepMetrics("slow", "GET slow", 10, 0, 900, [{ code: 200, count: 10 }]),
             stepMetrics("failing", "POST failing", 2, 2, 20, [{ code: 500, count: 2 }]),
@@ -26,6 +34,8 @@ describe("request-step metrics", () => {
     expect(markup).toContain("2 HTTP");
     expect(markup).toContain("500 2");
     expect(markup).toContain("900 / 900 ms");
+    expect(markup).toContain("Header 1");
+    expect(markup).toContain("Count-only 1");
   });
 });
 

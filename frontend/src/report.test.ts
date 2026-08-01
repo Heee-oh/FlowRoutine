@@ -151,6 +151,14 @@ describe("buildRunReport", () => {
     const batch = completedBatch(10, 10);
     batch.success = 8;
     batch.failed = 2;
+    batch.assertionFailuresByType = {
+      status: 1,
+      header: 2,
+      json: 3,
+      responseLatency: 4,
+      stepLatency: 5,
+      countOnly: 2,
+    };
     batch.stepMetrics = [{
       id: "request-items",
       name: "GET example.com/items",
@@ -163,6 +171,14 @@ describe("buildRunReport", () => {
       connRefused: 0,
       otherErrors: 1,
       assertionsFailed: 1,
+      assertionFailuresByType: {
+        status: 1,
+        header: 0,
+        json: 0,
+        responseLatency: 0,
+        stepLatency: 0,
+        countOnly: 0,
+      },
       captureFailures: 0,
       templateFailures: 0,
       runLatency: { samples: 10, avgMs: 25, minMs: 1, maxMs: 50, p95Ms: 45, p99Ms: 50, p999Ms: 50 },
@@ -172,6 +188,7 @@ describe("buildRunReport", () => {
     const report = buildRunReport(request, reportMetrics([batch]));
 
     expect(report.summary.requestSteps).toEqual(batch.stepMetrics);
+    expect(report.summary.failures.assertionTypes).toEqual(batch.assertionFailuresByType);
     expect(report.summary.requestSteps.reduce((total, step) => total + step.total, 0)).toBe(report.summary.totalRequests);
   });
 
@@ -182,29 +199,41 @@ describe("buildRunReport", () => {
       { name: "aUtHoRiZaTiOn", value: "Bearer report-auth-secret" },
       { name: "Accept", value: "application/json" },
     ];
-    request.config.scenarioSteps = [{
-      id: "request-items",
-      name: "GET /items?access_token=report-name-secret",
-      kind: "request",
-      method: "GET",
-      url: "https://example.com/items?X-Amz-Signature=report-step-secret",
-      headers: [{ name: "X-API-Key", value: "report-api-secret" }],
-      captures: [{
-        name: "token",
-        path: "$.items[0].token",
-        scope: "run",
-        onStatus: "2xx",
-      }],
-    }];
+    request.config.scenarioSteps = [
+      {
+        id: "request-items",
+        name: "GET /items?access_token=report-name-secret",
+        kind: "request",
+        method: "GET",
+        url: "https://example.com/items?X-Amz-Signature=report-step-secret",
+        headers: [{ name: "X-API-Key", value: "report-api-secret" }],
+        captures: [{
+          name: "token",
+          path: "$.items[0].token",
+          scope: "run",
+          onStatus: "2xx",
+        }],
+      },
+      {
+        kind: "assert",
+        assertion: {
+          type: "header",
+          operator: "equals",
+          headerName: "Set-Cookie",
+          expected: "report-assertion-secret",
+        },
+      },
+    ];
 
     const report = buildRunReport(request, reportMetrics([]));
     const serialized = JSON.stringify(report);
     const otherSecrets = structuredClone(request);
     otherSecrets.config.url = "https://bob:other@example.com/items?access_token=different";
     otherSecrets.config.scenarioSteps[0].url = "https://example.com/items?X-Amz-Signature=different";
+    otherSecrets.config.scenarioSteps[1].assertion!.expected = "different";
 
-    expect(report.schemaVersion).toBe(7);
-    expect(serialized).not.toMatch(/alice|password|report-(?:url|auth|step|api|name)-secret/);
+    expect(report.schemaVersion).toBe(8);
+    expect(serialized).not.toMatch(/alice|password|report-(?:url|auth|step|api|name|assertion)-secret/);
     expect(report.run.targetUrl).toContain("REDACTED");
     expect(report.config.headers[0].value).toBe("[redacted]");
     expect(report.config.scenarioSteps[0].url).toContain("REDACTED");
@@ -215,6 +244,7 @@ describe("buildRunReport", () => {
       scope: "run",
       onStatus: "2xx",
     }]);
+    expect(report.config.scenarioSteps[1].assertion?.expected).toBe("<redacted>");
     expect(buildRunReport(otherSecrets, reportMetrics([])).baseline.key).toBe(report.baseline.key);
   });
 

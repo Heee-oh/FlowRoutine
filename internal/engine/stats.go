@@ -18,6 +18,7 @@ const (
 	firstTrackedHTTPStatus             = 100
 	trackedHTTPStatusCount             = HTTPStatusCount - firstTrackedHTTPStatus
 	latencyHistogramFiniteBucketCount  = LatencyBucketCount - 1
+	assertionTypeCount                 = 5
 )
 
 var latencyBucketUpperBoundsNano = buildLatencyBucketUpperBounds()
@@ -30,54 +31,66 @@ type AtomicStats struct {
 }
 
 type statsShard struct {
-	totalRequests     atomic.Uint64
-	successRequests   atomic.Uint64
-	failedRequests    atomic.Uint64
-	timeoutFailures   atomic.Uint64
-	dnsFailures       atomic.Uint64
-	tlsFailures       atomic.Uint64
-	connRefused       atomic.Uint64
-	otherFailures     atomic.Uint64
-	assertionFailures atomic.Uint64
-	captureFailures   atomic.Uint64
-	templateFailures  atomic.Uint64
-	latencySamples    atomic.Uint64
-	totalLatencyNano  atomic.Uint64
-	minLatencyNano    atomic.Uint64
-	maxLatencyNano    atomic.Uint64
-	latencyBuckets    [LatencyBucketCount]atomic.Uint64
-	statusCodes       [trackedHTTPStatusCount]atomic.Uint64
-	bytesRead         atomic.Uint64
-	bytesWritten      atomic.Uint64
-	_                 [64]byte
+	totalRequests              atomic.Uint64
+	successRequests            atomic.Uint64
+	failedRequests             atomic.Uint64
+	timeoutFailures            atomic.Uint64
+	dnsFailures                atomic.Uint64
+	tlsFailures                atomic.Uint64
+	connRefused                atomic.Uint64
+	otherFailures              atomic.Uint64
+	assertionFailures          atomic.Uint64
+	scenarioAssertionFailures  [assertionTypeCount]atomic.Uint64
+	countOnlyAssertionFailures atomic.Uint64
+	captureFailures            atomic.Uint64
+	templateFailures           atomic.Uint64
+	latencySamples             atomic.Uint64
+	totalLatencyNano           atomic.Uint64
+	minLatencyNano             atomic.Uint64
+	maxLatencyNano             atomic.Uint64
+	latencyBuckets             [LatencyBucketCount]atomic.Uint64
+	statusCodes                [trackedHTTPStatusCount]atomic.Uint64
+	bytesRead                  atomic.Uint64
+	bytesWritten               atomic.Uint64
+	_                          [64]byte
 }
 
 type Snapshot struct {
-	StartedAt         time.Time
-	At                time.Time
-	TotalRequests     uint64
-	SuccessRequests   uint64
-	FailedRequests    uint64
-	TimeoutFailures   uint64
-	DNSFailures       uint64
-	TLSFailures       uint64
-	ConnRefused       uint64
-	OtherFailures     uint64
-	AssertionFailures uint64
-	CaptureFailures   uint64
-	TemplateFailures  uint64
-	DroppedIterations uint64
-	LatencySamples    uint64
-	TotalLatencyNano  uint64
-	MinLatencyNano    uint64
-	MaxLatencyNano    uint64
-	P95LatencyNano    uint64
-	P99LatencyNano    uint64
-	P999LatencyNano   uint64
-	LatencyBuckets    [LatencyBucketCount]uint64
-	StatusCodes       [HTTPStatusCount]uint64
-	BytesRead         uint64
-	BytesWritten      uint64
+	StartedAt               time.Time
+	At                      time.Time
+	TotalRequests           uint64
+	SuccessRequests         uint64
+	FailedRequests          uint64
+	TimeoutFailures         uint64
+	DNSFailures             uint64
+	TLSFailures             uint64
+	ConnRefused             uint64
+	OtherFailures           uint64
+	AssertionFailures       uint64
+	AssertionFailuresByType AssertionFailureCounts
+	CaptureFailures         uint64
+	TemplateFailures        uint64
+	DroppedIterations       uint64
+	LatencySamples          uint64
+	TotalLatencyNano        uint64
+	MinLatencyNano          uint64
+	MaxLatencyNano          uint64
+	P95LatencyNano          uint64
+	P99LatencyNano          uint64
+	P999LatencyNano         uint64
+	LatencyBuckets          [LatencyBucketCount]uint64
+	StatusCodes             [HTTPStatusCount]uint64
+	BytesRead               uint64
+	BytesWritten            uint64
+}
+
+type AssertionFailureCounts struct {
+	Status          uint64
+	Header          uint64
+	JSON            uint64
+	ResponseLatency uint64
+	StepLatency     uint64
+	CountOnly       uint64
 }
 
 func (s *AtomicStats) Init(virtualUsers int) {
@@ -186,6 +199,7 @@ func (s *AtomicStats) Snapshot(now time.Time) Snapshot {
 		snapshot.ConnRefused += shard.connRefused.Load()
 		snapshot.OtherFailures += shard.otherFailures.Load()
 		snapshot.AssertionFailures += shard.assertionFailures.Load()
+		addAssertionFailureCounts(&snapshot.AssertionFailuresByType, shard.scenarioAssertionFailureCounts())
 		snapshot.CaptureFailures += shard.captureFailures.Load()
 		snapshot.TemplateFailures += shard.templateFailures.Load()
 		snapshot.LatencySamples += shard.latencySamples.Load()
@@ -246,6 +260,10 @@ func (s *statsShard) reset() {
 	s.connRefused.Store(0)
 	s.otherFailures.Store(0)
 	s.assertionFailures.Store(0)
+	for index := range s.scenarioAssertionFailures {
+		s.scenarioAssertionFailures[index].Store(0)
+	}
+	s.countOnlyAssertionFailures.Store(0)
 	s.captureFailures.Store(0)
 	s.templateFailures.Store(0)
 	s.latencySamples.Store(0)
@@ -347,6 +365,54 @@ func (s *statsShard) recordFailureKind(failure FailureKind) {
 
 func (s *statsShard) RecordAssertionFailure() {
 	s.assertionFailures.Add(1)
+}
+
+func (s *statsShard) RecordScenarioAssertionFailure(typeName AssertionType, countOnly bool) {
+	if index := assertionTypeIndex(typeName); index >= 0 {
+		s.scenarioAssertionFailures[index].Add(1)
+	}
+	if countOnly {
+		s.countOnlyAssertionFailures.Add(1)
+		return
+	}
+	s.RecordAssertionFailure()
+}
+
+func (s *statsShard) scenarioAssertionFailureCounts() AssertionFailureCounts {
+	return AssertionFailureCounts{
+		Status:          s.scenarioAssertionFailures[0].Load(),
+		Header:          s.scenarioAssertionFailures[1].Load(),
+		JSON:            s.scenarioAssertionFailures[2].Load(),
+		ResponseLatency: s.scenarioAssertionFailures[3].Load(),
+		StepLatency:     s.scenarioAssertionFailures[4].Load(),
+		CountOnly:       s.countOnlyAssertionFailures.Load(),
+	}
+}
+
+func assertionTypeIndex(typeName AssertionType) int {
+	switch typeName {
+	case AssertionStatus:
+		return 0
+	case AssertionHeader:
+		return 1
+	case AssertionJSON:
+		return 2
+	case AssertionResponseLatency:
+		return 3
+	case AssertionStepLatency:
+		return 4
+	default:
+		return -1
+	}
+}
+
+func addAssertionFailureCounts(target *AssertionFailureCounts, next AssertionFailureCounts) {
+	target.Status += next.Status
+	target.Header += next.Header
+	target.JSON += next.JSON
+	target.ResponseLatency += next.ResponseLatency
+	target.StepLatency += next.StepLatency
+	target.CountOnly += next.CountOnly
 }
 
 func (s *statsShard) RecordCaptureFailure() {

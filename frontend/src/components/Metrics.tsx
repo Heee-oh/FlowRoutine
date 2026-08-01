@@ -36,8 +36,8 @@ export const MetricGrid = memo(function MetricGrid() {
         />
         <MetricDetail
           label="Assertions"
-          value={formatNumber(latest?.assertionsFailed ?? 0)}
-          title={`Capture ${formatNumber(latest?.captureFailures ?? 0)} · Template ${formatNumber(latest?.templateFailures ?? 0)}`}
+          value={formatNumber(assertionDiagnosticFailures(latest?.assertionsFailed ?? 0, latest?.assertionFailuresByType?.countOnly))}
+          title={`${assertionBreakdownTitle(latest?.assertionFailuresByType)} · Capture ${formatNumber(latest?.captureFailures ?? 0)} · Template ${formatNumber(latest?.templateFailures ?? 0)}`}
         />
         <MetricDetail
           label="Samples"
@@ -180,6 +180,9 @@ export const StatusDetailsDialog = memo(function StatusDetailsDialog({
           <MetricDetail label="Failed" value={formatNumber(batch?.failed ?? 0)} />
           <MetricDetail label="Dropped" value={formatNumber(batch?.droppedIterations ?? 0)} />
         </div>
+        <div className="inspector-note">
+          {assertionBreakdownTitle(batch?.assertionFailuresByType)}
+        </div>
         {statusCodes.length === 0 ? (
           <div className="inspector-note">No HTTP responses yet</div>
         ) : (
@@ -220,7 +223,8 @@ export const StatusDetailsDialog = memo(function StatusDetailsDialog({
 });
 
 const RequestStepRow = memo(function RequestStepRow({ step }: { step: RequestStepMetrics }) {
-  const diagnosticFailures = step.failed + step.assertionsFailed;
+  const assertions = assertionDiagnosticFailures(step.assertionsFailed, step.assertionFailuresByType?.countOnly);
+  const diagnosticFailures = step.failed + assertions;
   const failureRate = step.total > 0 ? (step.failed / step.total) * 100 : 0;
   const statuses = step.statusCodes.map((status) => `${status.code} ${formatNumber(status.count)}`).join(" · ");
   return (
@@ -230,18 +234,33 @@ const RequestStepRow = memo(function RequestStepRow({ step }: { step: RequestSte
         <small title={step.id}>{step.id}{statuses ? ` · ${statuses}` : ""}</small>
       </div>
       <span>{formatNumber(step.total)}</span>
-      <span title={`${formatNumber(failureRate, 1)}% HTTP failure rate`}>
-        {formatNumber(step.failed)} HTTP · {formatNumber(step.assertionsFailed)} diagnostics
+      <span title={`${formatNumber(failureRate, 1)}% HTTP failure rate · ${assertionBreakdownTitle(step.assertionFailuresByType)}`}>
+        {formatNumber(step.failed)} HTTP · {formatNumber(assertions)} diagnostics
       </span>
       <span>{formatNumber(step.runLatency.p95Ms, 2)} / {formatNumber(step.runLatency.p99Ms, 2)} ms</span>
     </div>
   );
 });
 
+function assertionBreakdownTitle(counts: MetricsBatch["assertionFailuresByType"]) {
+  return [
+    `Status ${formatNumber(counts?.status ?? 0)}`,
+    `Header ${formatNumber(counts?.header ?? 0)}`,
+    `JSON ${formatNumber(counts?.json ?? 0)}`,
+    `Response latency ${formatNumber(counts?.responseLatency ?? 0)}`,
+    `Step latency ${formatNumber(counts?.stepLatency ?? 0)}`,
+    `Count-only ${formatNumber(counts?.countOnly ?? 0)}`,
+  ].join(" · ");
+}
+
 function compareRequestSteps(left: RequestStepMetrics, right: RequestStepMetrics) {
-  const leftFailures = left.failed + left.assertionsFailed;
-  const rightFailures = right.failed + right.assertionsFailed;
+  const leftFailures = left.failed + assertionDiagnosticFailures(left.assertionsFailed, left.assertionFailuresByType?.countOnly);
+  const rightFailures = right.failed + assertionDiagnosticFailures(right.assertionsFailed, right.assertionFailuresByType?.countOnly);
   return rightFailures - leftFailures || right.runLatency.p99Ms - left.runLatency.p99Ms || left.id.localeCompare(right.id);
+}
+
+function assertionDiagnosticFailures(enforced: number, countOnly: number | undefined) {
+  return enforced + (countOnly ?? 0);
 }
 
 const StatusCodeRow = memo(function StatusCodeRow({ item, total }: { item: StatusCodeCount; total: number }) {

@@ -45,7 +45,7 @@ export type LoadConfig = {
 export type ScenarioStep = {
   id?: string;
   name?: string;
-  kind: "request" | "delay" | "assertStatus";
+  kind: "request" | "delay" | "assert" | "assertStatus";
   url?: string;
   method?: string;
   headers?: Header[];
@@ -53,6 +53,18 @@ export type ScenarioStep = {
   captures?: Capture[];
   delayMs?: number;
   expectedStatus?: string;
+  assertion?: AssertionDefinition;
+};
+
+export type AssertionDefinition = {
+  type: "status" | "header" | "json" | "responseLatency" | "stepLatency";
+  operator?: "exists" | "equals";
+  headerName?: string;
+  jsonPath?: string;
+  expected?: string;
+  valueType?: "string" | "number" | "boolean" | "null";
+  maxLatencyMs?: number;
+  failureMode?: "continue" | "stop" | "countOnly";
 };
 
 export type Capture = {
@@ -127,6 +139,7 @@ export type MetricsBatch = {
   connRefused: number;
   otherErrors: number;
   assertionsFailed: number;
+  assertionFailuresByType?: AssertionFailureCounts;
   captureFailures: number;
   templateFailures: number;
   droppedIterations?: number;
@@ -151,10 +164,20 @@ export type RequestStepMetrics = {
   connRefused: number;
   otherErrors: number;
   assertionsFailed: number;
+  assertionFailuresByType?: AssertionFailureCounts;
   captureFailures: number;
   templateFailures: number;
   runLatency: CumulativeLatencyMetrics;
   statusCodes: StatusCodeCount[];
+};
+
+export type AssertionFailureCounts = {
+  status: number;
+  header: number;
+  json: number;
+  responseLatency: number;
+  stepLatency: number;
+  countOnly: number;
 };
 
 export type IntervalLatencyMetrics = {
