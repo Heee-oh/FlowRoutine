@@ -49,6 +49,8 @@ export const commonHeaderNames = [
 
 const savedScenariosKey = "flowroutine:saved-scenarios";
 const maxSavedScenarios = 12;
+const scenarioStepNameBytes = 256;
+const textEncoder = new TextEncoder();
 
 export const initialFlowEdges: Edge[] = [
   { id: "input-engine", source: "request-0", target: "engine-1" },
@@ -543,11 +545,15 @@ function isRunnableScenarioNode(node: Node<FlowNodeData> | undefined): node is N
 
 function nodeToScenarioStep(node: Node<FlowNodeData>, authSecrets: Record<string, RuntimeAuthSecret>): ScenarioStep | null {
   switch (node.data.kind) {
-    case "request":
+    case "request": {
+      const url = resolveNodeSecrets(node, stringValue(node.data.url, ""), authSecrets);
+      const method = stringValue(node.data.method, "GET");
       return {
+        id: node.id,
+        name: requestStepName(method, url),
         kind: "request",
-        url: resolveNodeSecrets(node, stringValue(node.data.url, ""), authSecrets),
-        method: stringValue(node.data.method, "GET"),
+        url,
+        method,
         headers: parseHeaderText(resolveNodeSecrets(
           node,
           headerTextFromNode(node.data, authSecrets[node.id]),
@@ -556,19 +562,51 @@ function nodeToScenarioStep(node: Node<FlowNodeData>, authSecrets: Record<string
         body: resolveNodeSecrets(node, stringValue(node.data.body, ""), authSecrets),
         captures: parseCaptureText(stringValue(node.data.capturesText, "")),
       };
+    }
     case "delay":
       return {
+        id: node.id,
+        name: "Delay",
         kind: "delay",
         delayMs: numberValue(node.data.delayMs, 0),
       };
     case "assertion":
       return {
+        id: node.id,
+        name: "Assert status",
         kind: "assertStatus",
         expectedStatus: stringValue(node.data.expectedStatus, "2xx"),
       };
     default:
       return null;
   }
+}
+
+function requestStepName(method: string, rawURL: string) {
+  const safeURL = sanitizeSensitiveURL(rawURL);
+  try {
+    const target = new URL(safeURL);
+    return truncateUTF8(`${method} ${target.host}${target.pathname}`, scenarioStepNameBytes);
+  } catch {
+    return truncateUTF8(`${method} ${safeURL}`, scenarioStepNameBytes);
+  }
+}
+
+function truncateUTF8(value: string, maximumBytes: number) {
+  if (textEncoder.encode(value).length <= maximumBytes) {
+    return value;
+  }
+  let bytes = 0;
+  let result = "";
+  for (const character of value) {
+    const size = textEncoder.encode(character).length;
+    if (bytes + size > maximumBytes) {
+      break;
+    }
+    bytes += size;
+    result += character;
+  }
+  return result;
 }
 
 function headerTextFromNode(data: FlowNodeData, authSecret?: RuntimeAuthSecret) {

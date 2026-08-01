@@ -28,6 +28,8 @@ type Header struct {
 }
 
 type ScenarioStep struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
 	Kind           string    `json:"kind"`
 	URL            string    `json:"url"`
 	Method         string    `json:"method"`
@@ -79,30 +81,31 @@ type LoadConfig struct {
 }
 
 type SnapshotResponse struct {
-	StartedAtUnixMs   int64             `json:"startedAtUnixMs"`
-	AtUnixMs          int64             `json:"atUnixMs"`
-	TotalRequests     uint64            `json:"totalRequests"`
-	SuccessRequests   uint64            `json:"successRequests"`
-	FailedRequests    uint64            `json:"failedRequests"`
-	TimeoutFailures   uint64            `json:"timeoutFailures"`
-	DNSFailures       uint64            `json:"dnsFailures"`
-	TLSFailures       uint64            `json:"tlsFailures"`
-	ConnRefused       uint64            `json:"connRefused"`
-	OtherFailures     uint64            `json:"otherFailures"`
-	AssertionFailures uint64            `json:"assertionFailures"`
-	CaptureFailures   uint64            `json:"captureFailures"`
-	TemplateFailures  uint64            `json:"templateFailures"`
-	DroppedIterations uint64            `json:"droppedIterations"`
-	LatencySamples    uint64            `json:"latencySamples"`
-	TotalLatencyNano  uint64            `json:"totalLatencyNano"`
-	MinLatencyNano    uint64            `json:"minLatencyNano"`
-	MaxLatencyNano    uint64            `json:"maxLatencyNano"`
-	P95LatencyNano    uint64            `json:"p95LatencyNano"`
-	P99LatencyNano    uint64            `json:"p99LatencyNano"`
-	P999LatencyNano   uint64            `json:"p999LatencyNano"`
-	BytesRead         uint64            `json:"bytesRead"`
-	BytesWritten      uint64            `json:"bytesWritten"`
-	StatusCodes       []StatusCodeCount `json:"statusCodes"`
+	StartedAtUnixMs   int64                `json:"startedAtUnixMs"`
+	AtUnixMs          int64                `json:"atUnixMs"`
+	TotalRequests     uint64               `json:"totalRequests"`
+	SuccessRequests   uint64               `json:"successRequests"`
+	FailedRequests    uint64               `json:"failedRequests"`
+	TimeoutFailures   uint64               `json:"timeoutFailures"`
+	DNSFailures       uint64               `json:"dnsFailures"`
+	TLSFailures       uint64               `json:"tlsFailures"`
+	ConnRefused       uint64               `json:"connRefused"`
+	OtherFailures     uint64               `json:"otherFailures"`
+	AssertionFailures uint64               `json:"assertionFailures"`
+	CaptureFailures   uint64               `json:"captureFailures"`
+	TemplateFailures  uint64               `json:"templateFailures"`
+	DroppedIterations uint64               `json:"droppedIterations"`
+	LatencySamples    uint64               `json:"latencySamples"`
+	TotalLatencyNano  uint64               `json:"totalLatencyNano"`
+	MinLatencyNano    uint64               `json:"minLatencyNano"`
+	MaxLatencyNano    uint64               `json:"maxLatencyNano"`
+	P95LatencyNano    uint64               `json:"p95LatencyNano"`
+	P99LatencyNano    uint64               `json:"p99LatencyNano"`
+	P999LatencyNano   uint64               `json:"p999LatencyNano"`
+	BytesRead         uint64               `json:"bytesRead"`
+	BytesWritten      uint64               `json:"bytesWritten"`
+	StatusCodes       []StatusCodeCount    `json:"statusCodes"`
+	StepMetrics       []RequestStepMetrics `json:"stepMetrics"`
 }
 
 type controllerState uint8
@@ -266,7 +269,7 @@ func (c *Controller) Snapshot() (SnapshotResponse, error) {
 	if e == nil {
 		return SnapshotResponse{}, ErrControllerNotStarted
 	}
-	return snapshotResponse(e.Snapshot()), nil
+	return snapshotResponse(e.Snapshot(), e.RequestStepSnapshots()), nil
 }
 
 func (c *Controller) stopBatcherWhenEngineStops(e *engine.Engine, batcher *Batcher) {
@@ -322,6 +325,8 @@ func (c LoadConfig) toEngineConfig() engine.Config {
 			})
 		}
 		steps = append(steps, engine.ScenarioStep{
+			ID:             step.ID,
+			Name:           step.Name,
 			Kind:           engine.StepKind(step.Kind),
 			URL:            step.URL,
 			Method:         step.Method,
@@ -371,7 +376,7 @@ func (c LoadConfig) toEngineConfig() engine.Config {
 	}
 }
 
-func snapshotResponse(snapshot engine.Snapshot) SnapshotResponse {
+func snapshotResponse(snapshot engine.Snapshot, steps []engine.RequestStepSnapshot) SnapshotResponse {
 	return SnapshotResponse{
 		StartedAtUnixMs:   snapshot.StartedAt.UnixMilli(),
 		AtUnixMs:          snapshot.At.UnixMilli(),
@@ -397,5 +402,6 @@ func snapshotResponse(snapshot engine.Snapshot) SnapshotResponse {
 		BytesRead:         snapshot.BytesRead,
 		BytesWritten:      snapshot.BytesWritten,
 		StatusCodes:       buildStatusCodeCounts(snapshot.StatusCodes),
+		StepMetrics:       buildRequestStepMetrics(steps),
 	}
 }

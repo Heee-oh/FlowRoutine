@@ -56,8 +56,8 @@ go build ./...
 | Request setup | Method, URL, headers, body, auth helpers, JSON capture variables, and recent run loading |
 | Execution | Linear path execution from Request through Engine, with Delay and Assert support |
 | Engine | Constant/ramping VUs, constant/ramping arrival rate, graceful stop, RPS cap, timeouts, max connections, keep-alive reuse |
-| Metrics | RPS, total/success/failed/dropped counts, latency percentiles, transport failures, HTTP status breakdown |
-| Reports | Completed-run JSON export with SLO pass/fail, local baseline comparison, redacted sensitive headers, and body-size metadata |
+| Metrics | RPS, aggregate and request-step counts, latency percentiles, transport failures, dropped iterations, and HTTP status diagnostics |
+| Reports | Completed-run JSON export with per-step diagnostics, SLO pass/fail, local baseline comparison, and sensitive-data redaction |
 | Interop | k6 JavaScript export with thresholds and sensitive headers mapped to environment variables |
 | UI | Node help, Korean/English descriptions, adjustable chart window, wheel zoom, edge deletion |
 
@@ -66,10 +66,15 @@ virtual-user loop; run values keep the first successful value for that virtual u
 dot segments and array indexes such as `$.items[0].token`. A missing value never sends an unresolved template.
 
 Request, failure, byte, and status-code summaries use the final cumulative engine snapshot and remain exact.
-Latency is sampled deterministically once every configured N requests per worker. Reports disclose total
+Latency sampling selects one of every configured N iterations per worker and records every request step in that
+iteration, avoiding systematic gaps in multi-request scenarios. Reports disclose total
 requests, latency samples, and the effective sampled fraction. Realtime charts retain at most 2,048 lightweight
 points, while exported report timelines retain at most 1,000 points. Streaming downsampling preserves the first
 and last samples plus per-bucket RPS, P95, and P99 minimum and maximum excursions.
+
+Each request node keeps a stable step ID with sharded, fixed-size latency and HTTP-status histograms. The engine
+caps step-stat shards at four and scenarios at 512 steps, keeping worst-case step-metric storage below 25 MiB.
+Compact cumulative step summaries are added to realtime events at most once per second and always on completion.
 
 Global request limits use one central pacer per engine run across all scenario steps. Up to 1,000 RPS it keeps
 a single-permit burst and issues one permit every `1 / RPS`; higher rates are emitted in bounded 1ms batches.

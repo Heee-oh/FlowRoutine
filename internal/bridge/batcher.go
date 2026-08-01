@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	MetricsBatchEvent = "metrics:batch"
-	DefaultInterval   = 150 * time.Millisecond
-	MinInterval       = 100 * time.Millisecond
-	MaxInterval       = 5 * time.Second
+	MetricsBatchEvent   = "metrics:batch"
+	DefaultInterval     = 150 * time.Millisecond
+	MinInterval         = 100 * time.Millisecond
+	MaxInterval         = 5 * time.Second
+	StepMetricsInterval = time.Second
 )
 
 var ErrBatcherRunning = errors.New("metrics batcher is already running")
@@ -45,6 +46,7 @@ type MetricsBatch struct {
 	BytesRead                      uint64                   `json:"bytesRead"`
 	BytesWritten                   uint64                   `json:"bytesWritten"`
 	StatusCodes                    []StatusCodeCount        `json:"statusCodes"`
+	StepMetrics                    []RequestStepMetrics     `json:"stepMetrics,omitempty"`
 }
 
 type IntervalLatencyMetrics struct {
@@ -68,6 +70,24 @@ type CumulativeLatencyMetrics struct {
 type StatusCodeCount struct {
 	Code  int    `json:"code"`
 	Count uint64 `json:"count"`
+}
+
+type RequestStepMetrics struct {
+	ID               string                   `json:"id"`
+	Name             string                   `json:"name"`
+	Total            uint64                   `json:"total"`
+	Success          uint64                   `json:"success"`
+	Failed           uint64                   `json:"failed"`
+	Timeout          uint64                   `json:"timeout"`
+	DNS              uint64                   `json:"dns"`
+	TLS              uint64                   `json:"tls"`
+	ConnRefused      uint64                   `json:"connRefused"`
+	OtherErrors      uint64                   `json:"otherErrors"`
+	AssertionsFailed uint64                   `json:"assertionsFailed"`
+	CaptureFailures  uint64                   `json:"captureFailures"`
+	TemplateFailures uint64                   `json:"templateFailures"`
+	RunLatency       CumulativeLatencyMetrics `json:"runLatency"`
+	StatusCodes      []StatusCodeCount        `json:"statusCodes"`
 }
 
 type Batcher struct {
@@ -126,9 +146,23 @@ func (b *Batcher) Stop() {
 
 func (b *Batcher) run(ctx context.Context, done chan struct{}) {
 	previous := b.engine.Snapshot()
-	defer func() {
+	lastStepMetricsAt := time.Time{}
+	emit := func(now time.Time, forceStepMetrics bool) {
 		current := b.engine.Snapshot()
-		b.emitter.Emit(ctx, MetricsBatchEvent, buildMetricsBatch(previous, current, b.engine.Running(), time.Now()))
+		var stepSnapshots []engine.RequestStepSnapshot
+		if shouldIncludeStepMetrics(lastStepMetricsAt, now, forceStepMetrics) {
+			stepSnapshots = b.engine.RequestStepSnapshots()
+			lastStepMetricsAt = now
+		}
+		b.emitter.Emit(
+			ctx,
+			MetricsBatchEvent,
+			buildMetricsBatchWithSteps(previous, current, b.engine.Running(), now, stepSnapshots),
+		)
+		previous = current
+	}
+	defer func() {
+		emit(time.Now(), true)
 
 		b.mu.Lock()
 		b.running = false
@@ -146,14 +180,22 @@ func (b *Batcher) run(ctx context.Context, done chan struct{}) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			current := b.engine.Snapshot()
-			b.emitter.Emit(ctx, MetricsBatchEvent, buildMetricsBatch(previous, current, b.engine.Running(), now))
-			previous = current
+			emit(now, false)
 		}
 	}
 }
 
 func buildMetricsBatch(previous engine.Snapshot, current engine.Snapshot, running bool, now time.Time) MetricsBatch {
+	return buildMetricsBatchWithSteps(previous, current, running, now, nil)
+}
+
+func buildMetricsBatchWithSteps(
+	previous engine.Snapshot,
+	current engine.Snapshot,
+	running bool,
+	now time.Time,
+	stepSnapshots []engine.RequestStepSnapshot,
+) MetricsBatch {
 	elapsed := current.At.Sub(previous.At).Seconds()
 	totalDelta := current.TotalRequests - previous.TotalRequests
 	latencyDelta := current.TotalLatencyNano - previous.TotalLatencyNano
@@ -195,7 +237,51 @@ func buildMetricsBatch(previous engine.Snapshot, current engine.Snapshot, runnin
 		BytesRead:                      current.BytesRead,
 		BytesWritten:                   current.BytesWritten,
 		StatusCodes:                    buildStatusCodeCounts(current.StatusCodes),
+		StepMetrics:                    buildRequestStepMetrics(stepSnapshots),
 	}
+}
+
+func shouldIncludeStepMetrics(last time.Time, now time.Time, force bool) bool {
+	return force || last.IsZero() || now.Sub(last) >= StepMetricsInterval
+}
+
+func buildRequestStepMetrics(snapshots []engine.RequestStepSnapshot) []RequestStepMetrics {
+	if len(snapshots) == 0 {
+		return nil
+	}
+	metrics := make([]RequestStepMetrics, len(snapshots))
+	for index, snapshot := range snapshots {
+		statusCodes := make([]StatusCodeCount, len(snapshot.StatusCodes))
+		for statusIndex, status := range snapshot.StatusCodes {
+			statusCodes[statusIndex] = StatusCodeCount{Code: status.Code, Count: status.Count}
+		}
+		metrics[index] = RequestStepMetrics{
+			ID:               snapshot.ID,
+			Name:             snapshot.Name,
+			Total:            snapshot.TotalRequests,
+			Success:          snapshot.SuccessRequests,
+			Failed:           snapshot.FailedRequests,
+			Timeout:          snapshot.TimeoutFailures,
+			DNS:              snapshot.DNSFailures,
+			TLS:              snapshot.TLSFailures,
+			ConnRefused:      snapshot.ConnRefused,
+			OtherErrors:      snapshot.OtherFailures,
+			AssertionsFailed: snapshot.AssertionFailures,
+			CaptureFailures:  snapshot.CaptureFailures,
+			TemplateFailures: snapshot.TemplateFailures,
+			RunLatency: CumulativeLatencyMetrics{
+				Samples: snapshot.LatencySamples,
+				AvgMs:   averageLatencyMs(snapshot.TotalLatencyNano, snapshot.LatencySamples),
+				MinMs:   float64(snapshot.MinLatencyNano) / float64(time.Millisecond),
+				MaxMs:   float64(snapshot.MaxLatencyNano) / float64(time.Millisecond),
+				P95Ms:   float64(snapshot.P95LatencyNano) / float64(time.Millisecond),
+				P99Ms:   float64(snapshot.P99LatencyNano) / float64(time.Millisecond),
+				P999Ms:  float64(snapshot.P999LatencyNano) / float64(time.Millisecond),
+			},
+			StatusCodes: statusCodes,
+		}
+	}
+	return metrics
 }
 
 func intervalLatencyMetrics(totalLatencyNano uint64, samples uint64, buckets *[engine.LatencyBucketCount]uint64) IntervalLatencyMetrics {

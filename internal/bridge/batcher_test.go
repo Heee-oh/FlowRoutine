@@ -161,6 +161,66 @@ func TestBuildMetricsBatchSeparatesIntervalAndRunLatency(t *testing.T) {
 	}
 }
 
+func TestBuildMetricsBatchIncludesCompactRequestStepDiagnostics(t *testing.T) {
+	now := time.Unix(20, 0)
+	batch := buildMetricsBatchWithSteps(
+		engine.Snapshot{At: now.Add(-time.Second)},
+		engine.Snapshot{At: now, TotalRequests: 7, SuccessRequests: 5, FailedRequests: 2},
+		true,
+		now,
+		[]engine.RequestStepSnapshot{{
+			ID:                "request-items",
+			Name:              "GET example.com/items",
+			TotalRequests:     7,
+			SuccessRequests:   5,
+			FailedRequests:    2,
+			TimeoutFailures:   1,
+			AssertionFailures: 1,
+			LatencySamples:    7,
+			TotalLatencyNano:  uint64(70 * time.Millisecond),
+			MinLatencyNano:    uint64(time.Millisecond),
+			MaxLatencyNano:    uint64(20 * time.Millisecond),
+			P95LatencyNano:    uint64(19 * time.Millisecond),
+			P99LatencyNano:    uint64(20 * time.Millisecond),
+			P999LatencyNano:   uint64(20 * time.Millisecond),
+			StatusCodes: []engine.StepStatusCodeCount{
+				{Code: 200, Count: 5},
+				{Code: 500, Count: 2},
+			},
+		}},
+	)
+
+	if len(batch.StepMetrics) != 1 {
+		t.Fatalf("got %d step metrics, want 1", len(batch.StepMetrics))
+	}
+	step := batch.StepMetrics[0]
+	if step.ID != "request-items" || step.Total != batch.Total || step.Failed != batch.Failed {
+		t.Fatalf("unexpected request-step totals: %+v", step)
+	}
+	if step.RunLatency.AvgMs != 10 || step.RunLatency.P99Ms != 20 {
+		t.Fatalf("unexpected request-step latency: %+v", step.RunLatency)
+	}
+	if len(step.StatusCodes) != 2 || step.StatusCodes[1] != (StatusCodeCount{Code: 500, Count: 2}) {
+		t.Fatalf("unexpected request-step status codes: %+v", step.StatusCodes)
+	}
+}
+
+func TestStepMetricsEmissionIsThrottledAndForcedAtCompletion(t *testing.T) {
+	startedAt := time.Unix(1, 0)
+	if !shouldIncludeStepMetrics(time.Time{}, startedAt, false) {
+		t.Fatal("first step-metrics snapshot should be included")
+	}
+	if shouldIncludeStepMetrics(startedAt, startedAt.Add(StepMetricsInterval-time.Millisecond), false) {
+		t.Fatal("step metrics should be omitted inside the throttle interval")
+	}
+	if !shouldIncludeStepMetrics(startedAt, startedAt.Add(StepMetricsInterval), false) {
+		t.Fatal("step metrics should be included after the throttle interval")
+	}
+	if !shouldIncludeStepMetrics(startedAt, startedAt.Add(time.Millisecond), true) {
+		t.Fatal("final step metrics should always be included")
+	}
+}
+
 func statusCodesSnapshot(values map[int]uint64) [engine.HTTPStatusCount]uint64 {
 	var statusCodes [engine.HTTPStatusCount]uint64
 	for code, count := range values {
@@ -207,6 +267,10 @@ func TestBatcherEmitsFinalStoppedBatch(t *testing.T) {
 		Duration:        10 * time.Millisecond,
 		RequestTimeout:  time.Millisecond,
 		MaxConnsPerHost: engine.DefaultMaxConnsPerHost,
+		ScenarioSteps: []engine.ScenarioStep{
+			{ID: "first", Kind: engine.StepRequest, URL: "http://127.0.0.1:1/first"},
+			{ID: "second", Kind: engine.StepRequest, URL: "http://127.0.0.1:1/second"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -229,6 +293,19 @@ func TestBatcherEmitsFinalStoppedBatch(t *testing.T) {
 	}
 	if emitter.lastBatch().Running {
 		t.Fatalf("expected final batch to report stopped, got %+v", emitter.lastBatch())
+	}
+	final := emitter.lastBatch()
+	if len(final.StepMetrics) != 2 {
+		t.Fatalf("expected final request-step metrics, got %+v", emitter.lastBatch())
+	}
+	var total, success, failed uint64
+	for _, step := range final.StepMetrics {
+		total += step.Total
+		success += step.Success
+		failed += step.Failed
+	}
+	if total != final.Total || success != final.Success || failed != final.Failed {
+		t.Fatalf("final aggregate does not equal request-step totals: batch=%+v steps=%+v", final, final.StepMetrics)
 	}
 }
 

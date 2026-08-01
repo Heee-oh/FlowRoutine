@@ -31,6 +31,35 @@ describe("metrics store", () => {
     expect(state.reportHistory).toBeNull();
     expect(state.runBatchCount).toBe(0);
   });
+
+  it("retains throttled request-step summaries between backend batches", () => {
+    const request = createRequest(1_000);
+    useMetricsStore.getState().beginRun(request);
+    const first = batch(1, true);
+    first.stepMetrics = [{
+      id: "request-0",
+      name: "GET example.com/",
+      total: 1,
+      success: 1,
+      failed: 0,
+      timeout: 0,
+      dns: 0,
+      tls: 0,
+      connRefused: 0,
+      otherErrors: 0,
+      assertionsFailed: 0,
+      captureFailures: 0,
+      templateFailures: 0,
+      runLatency: { samples: 1, avgMs: 10, minMs: 10, maxMs: 10, p95Ms: 10, p99Ms: 10, p999Ms: 10 },
+      statusCodes: [{ code: 200, count: 1 }],
+    }];
+    useMetricsStore.getState().pushBatch(first);
+    useMetricsStore.getState().pushBatch(batch(2, false));
+
+    const state = useMetricsStore.getState();
+    expect(state.latest?.stepMetrics).toEqual(first.stepMetrics);
+    expect(state.latestReport?.summary.requestSteps).toEqual(first.stepMetrics);
+  });
 });
 
 function batch(index: number, running: boolean): MetricsBatch {

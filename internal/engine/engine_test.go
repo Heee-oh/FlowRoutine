@@ -201,7 +201,7 @@ func TestEngineRunsScenarioStepsAndRecordsAssertionFailures(t *testing.T) {
 		MaxConnsPerHost: DefaultMaxConnsPerHost,
 		RateLimitRPS:    100,
 		ScenarioSteps: []ScenarioStep{
-			{Kind: StepRequest, URL: "http://unused"},
+			{ID: "request-home", Name: "GET home", Kind: StepRequest, URL: "http://unused"},
 			{Kind: StepDelay, Delay: time.Millisecond},
 			{Kind: StepAssertStatus, ExpectedStatus: "500"},
 		},
@@ -224,6 +224,16 @@ func TestEngineRunsScenarioStepsAndRecordsAssertionFailures(t *testing.T) {
 	}
 	if snapshot.AssertionFailures == 0 {
 		t.Fatal("expected assertion failures")
+	}
+	steps := engine.RequestStepSnapshots()
+	if len(steps) != 1 || steps[0].ID != "request-home" || steps[0].Name != "GET home" {
+		t.Fatalf("unexpected request-step identity: %+v", steps)
+	}
+	if steps[0].TotalRequests != snapshot.TotalRequests || steps[0].SuccessRequests != snapshot.SuccessRequests {
+		t.Fatalf("request-step totals do not match aggregate: step=%+v aggregate=%+v", steps[0], snapshot)
+	}
+	if steps[0].AssertionFailures != snapshot.AssertionFailures {
+		t.Fatalf("request-step assertions do not match aggregate: step=%d aggregate=%d", steps[0].AssertionFailures, snapshot.AssertionFailures)
 	}
 }
 
@@ -257,19 +267,21 @@ func TestEngineCapturesJSONVariablesForLaterSteps(t *testing.T) {
 	defer server.Shutdown()
 
 	engine, err := New(Config{
-		URL:             "http://unused/login",
-		VirtualUsers:    1,
-		Duration:        30 * time.Millisecond,
-		RequestTimeout:  time.Second,
-		MaxConnsPerHost: DefaultMaxConnsPerHost,
-		RateLimitRPS:    100,
+		URL:               "http://unused/login",
+		VirtualUsers:      1,
+		Duration:          30 * time.Millisecond,
+		RequestTimeout:    time.Second,
+		MaxConnsPerHost:   DefaultMaxConnsPerHost,
+		LatencySampleRate: 2,
 		ScenarioSteps: []ScenarioStep{
 			{
+				ID:       "login",
 				Kind:     StepRequest,
 				URL:      "http://unused/login",
 				Captures: []VariableCapture{{Name: "token", Path: "data.token"}},
 			},
 			{
+				ID:   "secure",
 				Kind: StepRequest,
 				URL:  "http://unused/secure",
 				Headers: []Header{{
@@ -297,6 +309,18 @@ func TestEngineCapturesJSONVariablesForLaterSteps(t *testing.T) {
 	if snapshot := engine.Snapshot(); snapshot.AssertionFailures != 0 {
 		t.Fatalf("expected no capture assertion failures, got %+v", snapshot)
 	}
+	steps := engine.RequestStepSnapshots()
+	if len(steps) != 2 || steps[0].LatencySamples == 0 || steps[1].LatencySamples == 0 ||
+		absoluteDifference(steps[0].LatencySamples, steps[1].LatencySamples) > 1 {
+		t.Fatalf("iteration sampling was biased between request steps: %+v", steps)
+	}
+}
+
+func absoluteDifference(left uint64, right uint64) uint64 {
+	if left >= right {
+		return left - right
+	}
+	return right - left
 }
 
 func TestEngineCountsHTTPErrorStatusAsFailure(t *testing.T) {

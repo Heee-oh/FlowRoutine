@@ -194,6 +194,16 @@ describe("scenario graph compilation", () => {
       "delay",
       "request",
     ]);
+    expect(request.config.scenarioSteps.map((step) => step.id)).toEqual([
+      first.id,
+      delay.id,
+      second.id,
+    ]);
+    expect(request.config.scenarioSteps.map((step) => step.name)).toEqual([
+      "GET first.example/",
+      "Delay",
+      "POST second.example/",
+    ]);
     expect(request.config.scenarioSteps[2].url).toBe("https://second.example");
   });
 

@@ -920,7 +920,9 @@ button:disabled {
 }
 
 .status-details-modal {
-  width: min(500px, calc(100vw - 48px));
+  width: min(820px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
 }
 
 .status-summary {
@@ -1004,6 +1006,79 @@ button:disabled {
   text-align: right;
   font-size: 12px;
   font-weight: 800;
+}
+
+.request-step-section,
+.request-step-list {
+  display: grid;
+  gap: 8px;
+}
+
+.request-step-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.request-step-heading h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.request-step-heading small {
+  color: var(--muted);
+}
+
+.request-step-list {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.request-step-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) 80px minmax(170px, 1fr) 130px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #0b1016;
+  padding: 9px 10px;
+  font-size: 12px;
+}
+
+.request-step-row-failing {
+  border-color: rgba(255, 107, 107, 0.42);
+}
+
+.request-step-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.request-step-row strong,
+.request-step-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.request-step-row small,
+.request-step-row > span {
+  color: var(--muted);
+}
+
+.request-step-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-color: transparent;
+  background: #111820;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
 }
 
 .chart-panel {

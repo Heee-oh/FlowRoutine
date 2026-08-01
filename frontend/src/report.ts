@@ -1,9 +1,9 @@
-import type { Header, LoadProfile, MetricsBatch, QualityGate, ScenarioStep, StartRequest, StatusCodeCount } from "./types";
+import type { Header, LoadProfile, MetricsBatch, QualityGate, RequestStepMetrics, ScenarioStep, StartRequest, StatusCodeCount } from "./types";
 import type { MetricHistoryPoint } from "./metricHistory";
 import { redactHeaders, redactSensitiveURL } from "./secretSanitization";
 
 export type RunReport = {
-  schemaVersion: 6;
+  schemaVersion: 7;
   generatedAtUnixMs: number;
   run: {
     targetUrl: string;
@@ -46,6 +46,8 @@ type ReportConfig = {
 };
 
 type ReportScenarioStep = {
+  id?: string;
+  name?: string;
   kind: ScenarioStep["kind"];
   url?: string;
   method?: string;
@@ -90,6 +92,7 @@ type ReportSummary = {
     written: number;
   };
   statusCodes: StatusCodeCount[];
+  requestSteps: RequestStepMetrics[];
 };
 
 type ReportTimelinePoint = {
@@ -162,7 +165,7 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
   const averageRps = elapsedMs > 0 ? total / (elapsedMs / 1_000) : 0;
 
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     generatedAtUnixMs: Date.now(),
     run: {
       targetUrl: redactSensitiveURL(request.config.url),
@@ -230,6 +233,7 @@ export function buildRunReport(request: StartRequest, metrics: RunReportMetrics)
         code: status.code,
         count: status.count,
       })),
+      requestSteps: (finalBatch.stepMetrics ?? []).map(redactRequestStepMetrics),
     },
     qualityGate: evaluateQualityGate(qualityGate, finalBatch, averageRps),
     baseline: {
@@ -527,6 +531,8 @@ export function downloadRunReport(report: RunReport) {
 function redactScenarioStep(step: ScenarioStep): ReportScenarioStep {
   if (step.kind === "request") {
     return {
+      id: step.id,
+      name: step.name ? redactSensitiveURL(step.name) : undefined,
       kind: step.kind,
       url: redactSensitiveURL(step.url ?? ""),
       method: step.method,
@@ -542,13 +548,26 @@ function redactScenarioStep(step: ScenarioStep): ReportScenarioStep {
   }
   if (step.kind === "delay") {
     return {
+      id: step.id,
+      name: step.name,
       kind: step.kind,
       delayMs: step.delayMs,
     };
   }
   return {
+    id: step.id,
+    name: step.name,
     kind: step.kind,
     expectedStatus: step.expectedStatus,
+  };
+}
+
+function redactRequestStepMetrics(step: RequestStepMetrics): RequestStepMetrics {
+  return {
+    ...step,
+    name: redactSensitiveURL(step.name),
+    runLatency: { ...step.runLatency },
+    statusCodes: step.statusCodes.map((status) => ({ ...status })),
   };
 }
 
@@ -603,6 +622,7 @@ function emptyBatch(): MetricsBatch {
     bytesRead: 0,
     bytesWritten: 0,
     statusCodes: [],
+    stepMetrics: [],
   };
 }
 
