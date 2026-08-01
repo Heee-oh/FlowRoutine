@@ -191,6 +191,18 @@ func buildMetricsBatch(previous engine.Snapshot, current engine.Snapshot, runnin
 	return buildMetricsBatchWithSteps(previous, current, running, now, nil)
 }
 
+// BuildMetricsBatch converts local or distributed engine snapshots to the
+// report schema consumed by the frontend.
+func BuildMetricsBatch(
+	previous engine.Snapshot,
+	current engine.Snapshot,
+	running bool,
+	now time.Time,
+	stepSnapshots []engine.RequestStepSnapshot,
+) MetricsBatch {
+	return buildMetricsBatchWithSteps(previous, current, running, now, stepSnapshots)
+}
+
 func buildMetricsBatchWithSteps(
 	previous engine.Snapshot,
 	current engine.Snapshot,

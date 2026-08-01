@@ -39,15 +39,21 @@ type Engine struct {
 type workerVariables struct {
 	iteration        map[string]string
 	run              map[string]string
+	runtime          map[string]string
 	renderBuffer     []byte
 	eligibleCaptures []compiledVariableCapture
 	captureValues    []string
 }
 
 func newWorkerVariables() *workerVariables {
+	return newWorkerVariablesWithRuntime(nil)
+}
+
+func newWorkerVariablesWithRuntime(runtimeVariables map[string]string) *workerVariables {
 	return &workerVariables{
 		iteration: make(map[string]string),
 		run:       make(map[string]string),
+		runtime:   runtimeVariables,
 	}
 }
 
@@ -56,6 +62,9 @@ func (variables *workerVariables) beginIteration() {
 }
 
 func (variables *workerVariables) value(name string) (string, bool) {
+	if value, ok := variables.runtime[name]; ok {
+		return value, true
+	}
 	if value, ok := variables.iteration[name]; ok {
 		return value, true
 	}
@@ -187,7 +196,7 @@ func (e *Engine) newWorkerRuntime(index int) workerRuntime {
 		index:            index,
 		stats:            e.stats.Shard(index),
 		sampleCountdown:  e.cfg.latencySampleRate,
-		variables:        newWorkerVariables(),
+		variables:        newWorkerVariablesWithRuntime(e.cfg.runtimeVariables),
 		assertionResults: make([]bool, e.cfg.assertionCount),
 	}
 }
