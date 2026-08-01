@@ -74,6 +74,10 @@ a single-permit burst and issues one permit every `1 / RPS`; higher rates are em
 Missed permits are not queued beyond one pacer tick. Saturated one-second tests allow ±20% scheduling
 tolerance; longer runs converge more closely.
 
+Engine counters use `min(VUs, 4 × GOMAXPROCS, 256)` stable stripes. Status-code and latency-histogram storage,
+snapshot scans, and reset work therefore stop growing with virtual users after the CPU-scaled stripe cap,
+while counters remain exact and latency percentiles retain the documented histogram precision.
+
 ## Architecture
 
 ```text

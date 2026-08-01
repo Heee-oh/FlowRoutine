@@ -2,14 +2,20 @@ package engine
 
 import (
 	"net"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/valyala/fasthttp"
 	"github.com/valyala/fasthttp/fasthttputil"
 )
 
 var benchOKBody = []byte("ok")
+var benchmarkStatsSnapshot Snapshot
+
+var statsBenchmarkVirtualUsers = [...]int{1, 1_000, 10_000, 100_000}
 
 func BenchmarkAcquireReleaseRequest(b *testing.B) {
 	engine, err := New(Config{
@@ -36,14 +42,51 @@ func BenchmarkAcquireReleaseRequest(b *testing.B) {
 }
 
 func BenchmarkStatsRecordSuccess(b *testing.B) {
-	var stats AtomicStats
-	stats.Reset(time.Now())
+	for _, virtualUsers := range statsBenchmarkVirtualUsers {
+		b.Run("VUs="+strconv.Itoa(virtualUsers), func(b *testing.B) {
+			var stats AtomicStats
+			stats.Init(virtualUsers)
+			stats.Reset(time.Now())
 
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		stats.RecordSuccess(time.Millisecond, 2, 32)
+			var nextShard atomic.Uint64
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				shard := stats.Shard(int(nextShard.Add(1) - 1))
+				for pb.Next() {
+					shard.RecordHTTPSuccessSampled(time.Millisecond, 2, 32, true, 200)
+				}
+			})
+			b.StopTimer()
+			reportStatsBenchmarkMetrics(b, &stats)
+		})
 	}
+}
+
+func BenchmarkStatsSnapshot(b *testing.B) {
+	for _, virtualUsers := range statsBenchmarkVirtualUsers {
+		b.Run("VUs="+strconv.Itoa(virtualUsers), func(b *testing.B) {
+			var stats AtomicStats
+			stats.Init(virtualUsers)
+			stats.Reset(time.Now())
+			stats.Shard(virtualUsers-1).RecordHTTPSuccessSampled(time.Millisecond, 2, 32, true, 200)
+
+			now := time.Now()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				benchmarkStatsSnapshot = stats.Snapshot(now)
+			}
+			b.StopTimer()
+			reportStatsBenchmarkMetrics(b, &stats)
+		})
+	}
+}
+
+func reportStatsBenchmarkMetrics(b *testing.B, stats *AtomicStats) {
+	b.Helper()
+	b.ReportMetric(float64(len(stats.shards)), "shards")
+	b.ReportMetric(float64(len(stats.shards))*float64(unsafe.Sizeof(statsShard{})), "B/stats")
 }
 
 func BenchmarkFasthttpClientLoopback(b *testing.B) {

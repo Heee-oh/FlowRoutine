@@ -2,13 +2,18 @@ package engine
 
 import (
 	"math"
+	"runtime"
 	"sync/atomic"
 	"time"
 )
 
 const (
-	LatencyBucketCount = 25
-	HTTPStatusCount    = 600
+	LatencyBucketCount      = 25
+	HTTPStatusCount         = 600
+	maxStatsShards          = 256
+	statsShardsPerProcessor = 4
+	firstTrackedHTTPStatus  = 100
+	trackedHTTPStatusCount  = HTTPStatusCount - firstTrackedHTTPStatus
 )
 
 var latencyBucketUpperBoundsNano = [LatencyBucketCount]uint64{
@@ -61,7 +66,7 @@ type statsShard struct {
 	minLatencyNano    atomic.Uint64
 	maxLatencyNano    atomic.Uint64
 	latencyBuckets    [LatencyBucketCount]atomic.Uint64
-	statusCodes       [HTTPStatusCount]atomic.Uint64
+	statusCodes       [trackedHTTPStatusCount]atomic.Uint64
 	bytesRead         atomic.Uint64
 	bytesWritten      atomic.Uint64
 	_                 [64]byte
@@ -94,14 +99,33 @@ type Snapshot struct {
 	BytesWritten      uint64
 }
 
-func (s *AtomicStats) Init(shards int) {
-	if shards < 1 {
-		shards = 1
-	}
+func (s *AtomicStats) Init(virtualUsers int) {
+	shards := statsShardCount(virtualUsers)
 	if len(s.shards) == shards {
 		return
 	}
 	s.shards = make([]statsShard, shards)
+}
+
+func statsShardCount(virtualUsers int) int {
+	return statsShardCountFor(virtualUsers, runtime.GOMAXPROCS(0))
+}
+
+func statsShardCountFor(virtualUsers int, processors int) int {
+	if virtualUsers < 1 {
+		return 1
+	}
+	if processors < 1 {
+		processors = 1
+	}
+	if processors > maxStatsShards/statsShardsPerProcessor {
+		processors = maxStatsShards / statsShardsPerProcessor
+	}
+	shards := processors * statsShardsPerProcessor
+	if virtualUsers < shards {
+		return virtualUsers
+	}
+	return shards
 }
 
 func (s *AtomicStats) Reset(startedAt time.Time) {
@@ -115,7 +139,7 @@ func (s *AtomicStats) Reset(startedAt time.Time) {
 }
 
 func (s *AtomicStats) Shard(index int) *statsShard {
-	return &s.shards[index]
+	return &s.shards[index%len(s.shards)]
 }
 
 func (s *AtomicStats) RecordSuccess(latency time.Duration, bytesRead int, bytesWritten int) {
@@ -181,8 +205,8 @@ func (s *AtomicStats) Snapshot(now time.Time) Snapshot {
 		for bucket := range snapshot.LatencyBuckets {
 			snapshot.LatencyBuckets[bucket] += shard.latencyBuckets[bucket].Load()
 		}
-		for code := range snapshot.StatusCodes {
-			snapshot.StatusCodes[code] += shard.statusCodes[code].Load()
+		for code := range shard.statusCodes {
+			snapshot.StatusCodes[code+firstTrackedHTTPStatus] += shard.statusCodes[code].Load()
 		}
 
 		minLatencyNano := shard.minLatencyNano.Load()
@@ -311,8 +335,8 @@ func (s *statsShard) recordFailureSampled(latency time.Duration, bytesWritten in
 }
 
 func (s *statsShard) recordStatusCode(statusCode int) {
-	if statusCode >= 100 && statusCode < HTTPStatusCount {
-		s.statusCodes[statusCode].Add(1)
+	if statusCode >= firstTrackedHTTPStatus && statusCode < HTTPStatusCount {
+		s.statusCodes[statusCode-firstTrackedHTTPStatus].Add(1)
 	}
 }
 
