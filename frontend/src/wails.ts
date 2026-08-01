@@ -7,7 +7,10 @@ export function startLoad(request: StartRequest) {
   if (!startLoad) {
     return Promise.reject(new Error("Wails bridge is unavailable"));
   }
-  return startLoad(request);
+  return startLoad({
+    config: request.config,
+    batchIntervalMs: request.batchIntervalMs,
+  });
 }
 
 export function stopLoad() {
@@ -16,6 +19,14 @@ export function stopLoad() {
     return Promise.reject(new Error("Wails bridge is unavailable"));
   }
   return stopLoad();
+}
+
+export function importOpenAPI(url: string) {
+  const importOpenAPI = window.go?.main?.App?.ImportOpenAPI;
+  if (!importOpenAPI) {
+    return Promise.reject(new Error("Wails bridge is unavailable"));
+  }
+  return importOpenAPI(url);
 }
 
 export function onMetricsBatch(callback: (batch: MetricsBatch) => void) {

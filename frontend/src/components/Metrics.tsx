@@ -1,11 +1,13 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
-import { Activity, Gauge, ListChecks, Network, Timer } from "lucide-react";
+import { Activity, CheckCircle2, Download, Gauge, ListChecks, MinusCircle, Network, Timer, TrendingDown, TrendingUp, XCircle } from "lucide-react";
+import { downloadRunReport, type BaselineComparison, type QualityGateResult } from "../report";
 import { useMetricsStore } from "../store";
 import type { MetricsBatch, StatusCodeCount } from "../types";
 import { formatBytes, formatNumber } from "../format";
 
 export const MetricGrid = memo(function MetricGrid() {
   const latest = useMetricsStore((state) => state.latest);
+  const latestReport = useMetricsStore((state) => state.latestReport);
   const [statusDetailsOpen, setStatusDetailsOpen] = useState(false);
 
   return (
@@ -30,6 +32,40 @@ export const MetricGrid = memo(function MetricGrid() {
         <MetricDetail label="Read" value={formatBytes(latest?.bytesRead ?? 0)} />
       </div>
       <div className="metrics-footer">
+        <div className="metrics-footer-badges">
+          {latestReport ? (
+            <div
+              className={`quality-gate ${latestReport.qualityGate.passed ? "quality-gate-pass" : "quality-gate-fail"}`}
+              title={qualityGateTitle(latestReport.qualityGate)}
+            >
+              {latestReport.qualityGate.passed ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+              {latestReport.qualityGate.passed ? "SLO Passed" : "SLO Failed"}
+            </div>
+          ) : null}
+          {latestReport ? (
+            <div
+              className={`baseline-badge baseline-${latestReport.baseline.verdict}`}
+              title={baselineTitle(latestReport.baseline)}
+            >
+              {baselineIcon(latestReport.baseline)}
+              {baselineLabel(latestReport.baseline.verdict)}
+            </div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className="secondary icon-button metric-details-button"
+          aria-label="Export report"
+          title={latestReport ? "Export report" : "No completed run"}
+          disabled={!latestReport}
+          onClick={() => {
+            if (latestReport) {
+              downloadRunReport(latestReport);
+            }
+          }}
+        >
+          <Download size={15} />
+        </button>
         <button
           type="button"
           className="secondary icon-button metric-details-button"
@@ -149,6 +185,66 @@ const StatusCodeRow = memo(function StatusCodeRow({ item, total }: { item: Statu
     </div>
   );
 });
+
+function qualityGateTitle(gate: QualityGateResult) {
+  if (gate.checks.length === 0) {
+    return "No SLO gates configured";
+  }
+  return gate.checks
+    .map((check) => `${check.name}: ${formatNumber(check.actual, 2)} ${check.operator} ${formatNumber(check.threshold, 2)}`)
+    .join("\n");
+}
+
+function baselineLabel(verdict: BaselineComparison["verdict"]) {
+  switch (verdict) {
+    case "new-baseline":
+      return "Baseline set";
+    case "improved":
+      return "Improved";
+    case "regressed":
+      return "Regressed";
+    case "mixed":
+      return "Mixed";
+    case "stable":
+      return "Stable";
+  }
+}
+
+function baselineIcon(baseline: BaselineComparison) {
+  switch (baseline.verdict) {
+    case "improved":
+      return <TrendingUp size={14} />;
+    case "regressed":
+      return <TrendingDown size={14} />;
+    case "mixed":
+    case "stable":
+      return <MinusCircle size={14} />;
+    case "new-baseline":
+      return <CheckCircle2 size={14} />;
+  }
+}
+
+function baselineTitle(baseline: BaselineComparison) {
+  if (!baseline.deltas) {
+    return "First completed run for this scenario";
+  }
+  return [
+    `RPS ${formatSignedPercent(baseline.deltas.averageRpsPct)}`,
+    `P95 ${formatSignedPercent(baseline.deltas.p95LatencyPct)}`,
+    `P99 ${formatSignedPercent(baseline.deltas.p99LatencyPct)}`,
+    `Fail ${formatSignedPoints(baseline.deltas.failureRatePctPoints)}`,
+  ].join("\n");
+}
+
+function formatSignedPercent(value: number) {
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatNumber(value, 1)}%`;
+}
+
+function formatSignedPoints(value: number) {
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatNumber(value, 2)}pp`;
+}
 
 function drawChart(canvas: HTMLCanvasElement, points: MetricsBatch[]) {
   const rect = canvas.getBoundingClientRect();

@@ -1,7 +1,7 @@
 import type { Edge, Node } from "@xyflow/react";
 import { DEFAULT_METRIC_WINDOW_MS } from "./store";
 import { formatDuration } from "./format";
-import type { FlowSettings, Header, LoadConfig, ScenarioStep, StartRequest } from "./types";
+import type { Capture, Header, LoadConfig, OpenAPIEndpoint, ScenarioStep, StartRequest } from "./types";
 import type {
   FlowNodeData,
   FlowNodeKind,
@@ -56,7 +56,7 @@ export const initialFlowNodes: Node<FlowNodeData>[] = [
 export function createFlowNode(
   kind: FlowNodeKind,
   index: number,
-  settings: FlowSettings | null,
+  settings: Partial<FlowNodeData> | null,
   position?: { x: number; y: number },
   onDelete?: (id: string) => void,
 ): Node<FlowNodeData> {
@@ -68,6 +68,17 @@ export function createFlowNode(
     position: position ?? { x: 40 + (index % 4) * 220, y: 60 + Math.floor(index / 4) * 130 },
     data,
   });
+}
+
+export function openAPIEndpointToRequestSettings(endpoint: OpenAPIEndpoint, sourceURL: string): Partial<FlowNodeData> {
+  const method = endpoint.method.toUpperCase();
+  return {
+    url: openAPIEndpointURL(endpoint, sourceURL),
+    method,
+    headersText: openAPIHeadersText(method),
+    ...openAPIAuthSettings(endpoint),
+    body: endpoint.bodySample,
+  };
 }
 
 export function getHost(url: string) {
@@ -130,6 +141,7 @@ export function buildStartRequestFromGraph(
       scenarioSteps,
     },
     batchIntervalMs: numberValue(metricsNode?.data.batchIntervalMs, fallback.batchIntervalMs),
+    qualityGate: qualityGateFromMetricsNode(metricsNode),
   };
 }
 
@@ -153,7 +165,7 @@ export function refreshNodeDisplay(node: Node<FlowNodeData>): Node<FlowNodeData>
       data.caption = "think time";
       break;
     case "metrics":
-      data.value = "Batched";
+      data.value = gateCaption(data);
       data.caption = `${numberValue(data.batchIntervalMs, 150)}ms updates`;
       break;
     case "window":
@@ -162,6 +174,27 @@ export function refreshNodeDisplay(node: Node<FlowNodeData>): Node<FlowNodeData>
       break;
   }
   return { ...node, data };
+}
+
+function gateCaption(data: FlowNodeData) {
+  const maxFailureRatePct = numberValue(data.maxFailureRatePct, 1);
+  const maxP95LatencyMs = numberValue(data.maxP95LatencyMs, 500);
+  const maxP99LatencyMs = numberValue(data.maxP99LatencyMs, 1000);
+  const minRps = numberValue(data.minRps, 0);
+  if (maxFailureRatePct > 0 || maxP95LatencyMs > 0 || maxP99LatencyMs > 0 || minRps > 0) {
+    return "SLO gated";
+  }
+  return "Batched";
+}
+
+function qualityGateFromMetricsNode(metricsNode: Node<FlowNodeData> | undefined) {
+  const data = metricsNode?.data;
+  return {
+    maxFailureRatePct: numberValue(data?.maxFailureRatePct, 1),
+    maxP95LatencyMs: numberValue(data?.maxP95LatencyMs, 500),
+    maxP99LatencyMs: numberValue(data?.maxP99LatencyMs, 1000),
+    minRps: numberValue(data?.minRps, 0),
+  };
 }
 
 export function loadSavedScenarios(): SavedScenario[] {
@@ -289,13 +322,13 @@ export function formatHeaderRows(rows: HeaderRow[]) {
     .join("\n");
 }
 
-function nodeTemplate(kind: FlowNodeKind, settings: FlowSettings | null): FlowNodeTemplate {
+function nodeTemplate(kind: FlowNodeKind, settings: Partial<FlowNodeData> | null): FlowNodeTemplate {
   switch (kind) {
     case "request":
       return {
         label: "Request",
         value: settings?.method ?? "GET",
-        caption: settings ? getHost(settings.url) : "127.0.0.1:8080",
+        caption: settings?.url ? getHost(settings.url) : "127.0.0.1:8080",
         tone: "source",
         url: settings?.url ?? "http://127.0.0.1:8080",
         method: settings?.method ?? "GET",
@@ -304,6 +337,7 @@ function nodeTemplate(kind: FlowNodeKind, settings: FlowSettings | null): FlowNo
         authCookieName: "session",
         authApiKeyName: "X-Api-Key",
         body: settings?.body ?? "",
+        capturesText: settings?.capturesText ?? "",
       };
     case "engine":
       return {
@@ -337,11 +371,15 @@ function nodeTemplate(kind: FlowNodeKind, settings: FlowSettings | null): FlowNo
     case "metrics":
       return {
         label: "Metrics",
-        value: "Batched",
+        value: "SLO gated",
         caption: `${settings?.batchIntervalMs ?? 150}ms updates`,
         tone: "metrics",
         batchIntervalMs: settings?.batchIntervalMs ?? 150,
         latencySampleRate: settings?.latencySampleRate ?? 1,
+        maxFailureRatePct: settings?.maxFailureRatePct ?? 1,
+        maxP95LatencyMs: settings?.maxP95LatencyMs ?? 500,
+        maxP99LatencyMs: settings?.maxP99LatencyMs ?? 1000,
+        minRps: settings?.minRps ?? 0,
       };
     case "window":
       return {
@@ -351,6 +389,72 @@ function nodeTemplate(kind: FlowNodeKind, settings: FlowSettings | null): FlowNo
         tone: "window",
         windowMs: DEFAULT_METRIC_WINDOW_MS,
       };
+  }
+}
+
+function openAPIEndpointURL(endpoint: OpenAPIEndpoint, sourceURL: string) {
+  const serverURL = endpoint.serverUrl || sourceURL;
+  const path = openAPIPathWithSamples(endpoint);
+  try {
+    const base = new URL(serverURL, sourceURL);
+    const url = new URL(path.replace(/^\/+/, ""), normalizedBaseURL(base));
+    for (const parameter of endpoint.parameters ?? []) {
+      if (parameter.in === "query" && parameter.name) {
+        url.searchParams.set(parameter.name, parameter.sample || "string");
+      }
+    }
+    return url.toString();
+  } catch {
+    const query = openAPIQueryString(endpoint);
+    return `${serverURL.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}${query}`;
+  }
+}
+
+function openAPIPathWithSamples(endpoint: OpenAPIEndpoint) {
+  const pathParameters = new Map(
+    (endpoint.parameters ?? [])
+      .filter((parameter) => parameter.in === "path")
+      .map((parameter) => [parameter.name, parameter.sample || "1"]),
+  );
+  return endpoint.path.replace(/\{([^}]+)\}/g, (_match, name: string) => encodeURIComponent(pathParameters.get(name) ?? "1"));
+}
+
+function openAPIQueryString(endpoint: OpenAPIEndpoint) {
+  const params = new URLSearchParams();
+  for (const parameter of endpoint.parameters ?? []) {
+    if (parameter.in === "query" && parameter.name) {
+      params.set(parameter.name, parameter.sample || "string");
+    }
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+function normalizedBaseURL(url: URL) {
+  if (!url.pathname.endsWith("/")) {
+    url.pathname = `${url.pathname}/`;
+  }
+  return url;
+}
+
+function openAPIHeadersText(method: string) {
+  const headers = ["Accept: application/json"];
+  if (method !== "GET" && method !== "HEAD") {
+    headers.push("Content-Type: application/json");
+  }
+  return headers.join("\n");
+}
+
+function openAPIAuthSettings(endpoint: OpenAPIEndpoint): Partial<FlowNodeData> {
+  switch (endpoint.auth.type) {
+    case "bearer":
+      return { authType: "bearer" };
+    case "apiKey":
+      return { authType: "apiKey", authApiKeyName: endpoint.auth.name || "X-Api-Key" };
+    case "cookie":
+      return { authType: "cookie", authCookieName: endpoint.auth.name || "session" };
+    default:
+      return { authType: "none" };
   }
 }
 
@@ -422,6 +526,7 @@ function nodeToScenarioStep(node: Node<FlowNodeData>, authSecrets: Record<string
         method: stringValue(node.data.method, "GET"),
         headers: parseHeaderText(headerTextFromNode(node.data, authSecrets[node.id])),
         body: stringValue(node.data.body, ""),
+        captures: parseCaptureText(stringValue(node.data.capturesText, "")),
       };
     case "delay":
       return {
@@ -461,6 +566,24 @@ function authHeaderRowsFromNode(data: FlowNodeData, authSecret?: RuntimeAuthSecr
     default:
       return [];
   }
+}
+
+function parseCaptureText(raw: string): Capture[] {
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const splitAt = line.indexOf("=");
+      if (splitAt < 1) {
+        throw new Error(`Invalid capture: ${line}`);
+      }
+      return {
+        name: line.slice(0, splitAt).trim(),
+        path: line.slice(splitAt + 1).trim(),
+      };
+    })
+    .filter((capture) => capture.name && capture.path);
 }
 
 function parseHeaderRows(raw: string): HeaderRow[] {

@@ -8,9 +8,9 @@ import {
   useEdgesState,
   useNodesState,
 } from "@xyflow/react";
-import { HelpCircle, Play, Square, Workflow } from "lucide-react";
+import { FileCode, HelpCircle, Play, Square, Workflow } from "lucide-react";
 import { FlowCanvas } from "./components/FlowCanvas";
-import { HelpDialog, StartConfirmDialog } from "./components/Dialogs";
+import { HelpDialog, OpenAPIImportDialog, StartConfirmDialog } from "./components/Dialogs";
 import { MetricGrid, MetricsChart } from "./components/Metrics";
 import { NodeInspector } from "./components/NodeInspector";
 import { NodePalette } from "./components/NodePalette";
@@ -24,15 +24,24 @@ import {
   initialFlowNodes,
   loadSavedScenarios,
   nextNodeIndexFromNodes,
+  openAPIEndpointToRequestSettings,
   refreshNodeDisplay,
   reviveSavedNodes,
   saveScenario,
 } from "./flowModel";
 import type { FlowNodeData, FlowNodeKind, RuntimeAuthSecret, SafetyAssessment, SavedScenario } from "./flowTypes";
+import { parseHarArchive } from "./harImport";
 import type { HelpLanguage, HelpTopic } from "./help";
+import { downloadK6Script } from "./k6Export";
+import { parsePostmanCollection } from "./postmanImport";
 import { DEFAULT_METRIC_WINDOW_MS, useLoadStore, useMetricsStore } from "./store";
-import type { StartRequest } from "./types";
-import { onMetricsBatch, startLoad, stopLoad } from "./wails";
+import type { OpenAPIEndpoint, OpenAPIImportResponse, StartRequest } from "./types";
+import { importOpenAPI, onMetricsBatch, startLoad, stopLoad } from "./wails";
+
+type ImportedRequest = {
+  name: string;
+  settings: Partial<FlowNodeData>;
+};
 
 export function App() {
   const running = useLoadStore((state) => state.running);
@@ -43,6 +52,7 @@ export function App() {
   const setError = useLoadStore((state) => state.setError);
   const buildStartRequest = useLoadStore((state) => state.buildStartRequest);
   const pushBatch = useMetricsStore((state) => state.pushBatch);
+  const beginMetricsRun = useMetricsStore((state) => state.beginRun);
   const resetMetrics = useMetricsStore((state) => state.reset);
   const setMetricWindowMs = useMetricsStore((state) => state.setMetricWindowMs);
   const [pendingStart, setPendingStart] = useState<StartRequest | null>(null);
@@ -50,6 +60,11 @@ export function App() {
   const [pendingScenario, setPendingScenario] = useState<SavedScenario | null>(null);
   const [helpTopic, setHelpTopic] = useState<HelpTopic | null>(null);
   const [helpLanguage, setHelpLanguage] = useState<HelpLanguage>("ko");
+  const [openAPIImportOpen, setOpenAPIImportOpen] = useState(false);
+  const [openAPIImportLoading, setOpenAPIImportLoading] = useState(false);
+  const [openAPIImportError, setOpenAPIImportError] = useState("");
+  const [openAPIImportMessage, setOpenAPIImportMessage] = useState("");
+  const [openAPIImported, setOpenAPIImported] = useState<OpenAPIImportResponse | null>(null);
   const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>(loadSavedScenarios);
   const [authSecrets, setAuthSecrets] = useState<Record<string, RuntimeAuthSecret>>({});
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<Node<FlowNodeData>>(initialFlowNodes);
@@ -165,15 +180,16 @@ export function App() {
     try {
       setError("");
       setStopping(false);
-      resetMetrics();
+      beginMetricsRun(request);
       setRunning(true);
       await startLoad(request);
     } catch (err) {
+      resetMetrics();
       setRunning(false);
       setStopping(false);
       setError(err instanceof Error ? err.message : "Failed to start load test");
     }
-  }, [resetMetrics, setError, setRunning, setStopping]);
+  }, [beginMetricsRun, resetMetrics, setError, setRunning, setStopping]);
 
   const handleStart = useCallback(async () => {
     try {
@@ -211,6 +227,16 @@ export function App() {
     }
   }, [setError, setRunning, setStopping, stopping]);
 
+  const handleExportK6 = useCallback(() => {
+    try {
+      setError("");
+      const request = buildStartRequestFromGraph(flowNodes, flowEdges, buildStartRequest(), authSecrets);
+      downloadK6Script(request);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to export k6 script");
+    }
+  }, [authSecrets, buildStartRequest, flowEdges, flowNodes, setError]);
+
   const handleConfirmStart = useCallback(() => {
     if (!pendingStart) {
       return;
@@ -231,6 +257,117 @@ export function App() {
     setPendingSafety(null);
     setPendingScenario(null);
   }, []);
+
+  const handleOpenOpenAPIImport = useCallback(() => {
+    setOpenAPIImportError("");
+    setOpenAPIImportMessage("");
+    setOpenAPIImported(null);
+    setOpenAPIImportOpen(true);
+  }, []);
+
+  const handleCloseOpenAPIImport = useCallback(() => {
+    if (!openAPIImportLoading) {
+      setOpenAPIImportOpen(false);
+      setOpenAPIImportError("");
+      setOpenAPIImportMessage("");
+      setOpenAPIImported(null);
+    }
+  }, [openAPIImportLoading]);
+
+  const handleSubmitOpenAPIImport = useCallback(async (url: string) => {
+    setOpenAPIImportLoading(true);
+    setOpenAPIImportError("");
+    setOpenAPIImportMessage("");
+    setOpenAPIImported(null);
+    try {
+      const imported = await importOpenAPI(url);
+      setOpenAPIImported(imported);
+      setOpenAPIImportMessage(`Loaded ${imported.title || "OpenAPI document"} (${imported.openapi}) with ${imported.endpoints.length} endpoints`);
+    } catch (err) {
+      setOpenAPIImportError(err instanceof Error ? err.message : "Failed to load OpenAPI document");
+    } finally {
+      setOpenAPIImportLoading(false);
+    }
+  }, []);
+
+  const handleSelectOpenAPIEndpoint = useCallback((endpoint: OpenAPIEndpoint) => {
+    if (!openAPIImported) {
+      return;
+    }
+    const index = nextNodeIndex.current;
+    nextNodeIndex.current += 1;
+    const node = createFlowNode(
+      "request",
+      index,
+      openAPIEndpointToRequestSettings(endpoint, openAPIImported.sourceUrl),
+      undefined,
+      handleDeleteNode,
+    );
+    setFlowNodes((currentNodes) => currentNodes.concat(node));
+    setSelectedNodeId(node.id);
+    setOpenAPIImportOpen(false);
+    setOpenAPIImportError("");
+    setOpenAPIImportMessage("");
+    setOpenAPIImported(null);
+  }, [handleDeleteNode, openAPIImported, setFlowNodes]);
+
+  const replaceGraphWithImportedRequests = useCallback((importedRequests: ImportedRequest[]) => {
+    const requestNodes = importedRequests.map((item, index) => {
+      const node = createFlowNode(
+        "request",
+        index,
+        item.settings,
+        { x: 20 + index * 240, y: 80 },
+        handleDeleteNode,
+      );
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          label: item.name.slice(0, 42) || "Request",
+        },
+      };
+    });
+    const engineIndex = requestNodes.length;
+    const metricsIndex = engineIndex + 1;
+    const windowIndex = engineIndex + 2;
+    const engineNode = createFlowNode("engine", engineIndex, null, { x: 20 + engineIndex * 240, y: 80 }, handleDeleteNode);
+    const metricsNode = createFlowNode("metrics", metricsIndex, null, { x: 20 + metricsIndex * 240, y: 80 }, handleDeleteNode);
+    const windowNode = createFlowNode("window", windowIndex, null, { x: 20 + metricsIndex * 240, y: 215 }, handleDeleteNode);
+    const edges: Edge[] = requestNodes.map((node, index) => ({
+      id: index === requestNodes.length - 1 ? `${node.id}-${engineNode.id}` : `${node.id}-${requestNodes[index + 1].id}`,
+      source: node.id,
+      target: index === requestNodes.length - 1 ? engineNode.id : requestNodes[index + 1].id,
+    }));
+    edges.push(
+      { id: `${engineNode.id}-${metricsNode.id}`, source: engineNode.id, target: metricsNode.id },
+      { id: `${metricsNode.id}-${windowNode.id}`, source: metricsNode.id, target: windowNode.id },
+    );
+    const nodes = requestNodes.concat(engineNode, metricsNode, windowNode);
+    setFlowNodes(nodes);
+    setFlowEdges(edges);
+    setSelectedNodeId(requestNodes[0]?.id ?? null);
+    setAuthSecrets({});
+    nextNodeIndex.current = nodes.length;
+  }, [handleDeleteNode, setFlowEdges, setFlowNodes]);
+
+  const handleImportPostmanFile = useCallback(async (file: File) => {
+    try {
+      setError("");
+      replaceGraphWithImportedRequests(parsePostmanCollection(await file.text()));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to import Postman collection");
+    }
+  }, [replaceGraphWithImportedRequests, setError]);
+
+  const handleImportHarFile = useCallback(async (file: File) => {
+    try {
+      setError("");
+      replaceGraphWithImportedRequests(parseHarArchive(await file.text()));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to import HAR file");
+    }
+  }, [replaceGraphWithImportedRequests, setError]);
 
   return (
     <div className="app-shell">
@@ -273,6 +410,16 @@ export function App() {
             <h2>HTTP target stress flow</h2>
           </div>
           <div className="toolbar-actions">
+            <button
+              type="button"
+              className="secondary icon-button"
+              aria-label="Export k6 script"
+              title="Export k6 script"
+              disabled={running || stopping}
+              onClick={handleExportK6}
+            >
+              <FileCode size={17} />
+            </button>
             <button type="button" className="secondary icon-button" aria-label="Open help" title="Help" onClick={() => setHelpTopic("overview")}>
               <HelpCircle size={17} />
             </button>
@@ -280,7 +427,12 @@ export function App() {
           </div>
         </header>
 
-        <NodePalette onAddNode={handleAddNode} />
+        <NodePalette
+          onAddNode={handleAddNode}
+          onOpenImport={handleOpenOpenAPIImport}
+          onImportHar={handleImportHarFile}
+          onImportPostman={handleImportPostmanFile}
+        />
 
         <FlowCanvas
           nodes={flowNodes}
@@ -309,6 +461,17 @@ export function App() {
           language={helpLanguage}
           setLanguage={setHelpLanguage}
           onClose={() => setHelpTopic(null)}
+        />
+      ) : null}
+      {openAPIImportOpen ? (
+        <OpenAPIImportDialog
+          error={openAPIImportError}
+          imported={openAPIImported}
+          loading={openAPIImportLoading}
+          message={openAPIImportMessage}
+          onCancel={handleCloseOpenAPIImport}
+          onSelectEndpoint={handleSelectOpenAPIEndpoint}
+          onSubmit={handleSubmitOpenAPIImport}
         />
       ) : null}
     </div>

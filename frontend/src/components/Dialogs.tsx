@@ -1,9 +1,9 @@
-import { memo } from "react";
+import { memo, useMemo, useState } from "react";
 import type { HelpLanguage, HelpTopic } from "../help";
 import { helpDialogTitle, nodeHelpItems, overviewHelpItems } from "../help";
 import { nodePalette } from "../flowModel";
 import type { SafetyAssessment } from "../flowTypes";
-import type { StartRequest } from "../types";
+import type { OpenAPIEndpoint, OpenAPIImportResponse, StartRequest } from "../types";
 import { formatNumber } from "../format";
 
 export const HelpDialog = memo(function HelpDialog({
@@ -91,6 +91,121 @@ export const StartConfirmDialog = memo(function StartConfirmDialog({
           <button type="button" className="danger" onClick={onConfirm} disabled={safety.target.tone === "invalid"}>Start test</button>
         </div>
       </div>
+    </div>
+  );
+});
+
+export const OpenAPIImportDialog = memo(function OpenAPIImportDialog({
+  error,
+  imported,
+  loading,
+  message,
+  onCancel,
+  onSelectEndpoint,
+  onSubmit,
+}: {
+  error: string;
+  imported: OpenAPIImportResponse | null;
+  loading: boolean;
+  message: string;
+  onCancel: () => void;
+  onSelectEndpoint: (endpoint: OpenAPIEndpoint) => void;
+  onSubmit: (url: string) => void | Promise<void>;
+}) {
+  const [url, setUrl] = useState("http://localhost:8080/v3/api-docs");
+  const [query, setQuery] = useState("");
+  const trimmedUrl = url.trim();
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredEndpoints = useMemo(() => {
+    if (!imported) {
+      return [];
+    }
+    if (!normalizedQuery) {
+      return imported.endpoints;
+    }
+    return imported.endpoints.filter((endpoint) => [
+      endpoint.method,
+      endpoint.path,
+      endpoint.summary,
+      endpoint.operationId,
+      endpoint.tags.join(" "),
+    ].join(" ").toLowerCase().includes(normalizedQuery));
+  }, [imported, normalizedQuery]);
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form
+        className="modal openapi-import-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="openapi-import-title"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (trimmedUrl) {
+            onSubmit(trimmedUrl);
+          }
+        }}
+      >
+        <div>
+          <div className="eyebrow">Import</div>
+          <h2 id="openapi-import-title">OpenAPI / Swagger</h2>
+        </div>
+        <label className="field-stack">
+          <span>OpenAPI JSON URL</span>
+          <input
+            autoFocus
+            type="url"
+            value={url}
+            placeholder="http://localhost:8080/v3/api-docs"
+            onChange={(event) => setUrl(event.target.value)}
+          />
+        </label>
+        {error ? <div className="dialog-error">{error}</div> : null}
+        {message ? <div className="dialog-success">{message}</div> : null}
+        {imported ? (
+          <section className="endpoint-results" aria-label="Imported endpoints">
+            <div className="endpoint-results-head">
+              <div>
+                <strong>{imported.endpoints.length} endpoints</strong>
+                <span>{imported.servers[0]?.url || imported.sourceUrl}</span>
+              </div>
+              <input
+                type="search"
+                value={query}
+                placeholder="Search endpoints"
+                aria-label="Search endpoints"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+            <div className="endpoint-list">
+              {filteredEndpoints.length === 0 ? (
+                <div className="endpoint-empty">No endpoints match this search.</div>
+              ) : (
+                filteredEndpoints.map((endpoint) => (
+                  <button
+                    key={`${endpoint.method} ${endpoint.path} ${endpoint.operationId}`}
+                    type="button"
+                    className="secondary endpoint-row"
+                    disabled={loading}
+                    onClick={() => onSelectEndpoint(endpoint)}
+                  >
+                    <span className={`method-badge method-${endpoint.method.toLowerCase()}`}>{endpoint.method}</span>
+                    <span className="endpoint-main">
+                      <strong>{endpoint.path}</strong>
+                      <small>{endpoint.summary || endpoint.operationId || "No summary"}</small>
+                    </span>
+                    {endpoint.deprecated ? <span className="deprecated-badge">Deprecated</span> : null}
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
+        ) : null}
+        <div className="modal-actions">
+          <button type="button" className="secondary" onClick={onCancel} disabled={loading}>Cancel</button>
+          <button type="submit" disabled={!trimmedUrl || loading}>{loading ? "Loading" : "Load endpoints"}</button>
+        </div>
+      </form>
     </div>
   );
 });

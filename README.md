@@ -21,8 +21,14 @@ Built with OpenAI Codex assistance.
 ## Why FlowRoutine
 
 - **Visual scenario editing**: Build request, delay, assertion, engine, metrics, and chart-window nodes on a React Flow canvas.
+- **Postman/OpenAPI/HAR import**: Turn Postman Collection v2 JSON files, OpenAPI endpoints, or browser HAR captures into runnable scenario nodes.
+- **Stateful API flows**: Capture JSON response values and reuse them as `{{variables}}` in later request URLs, headers, or bodies.
 - **Local load engine**: Run virtual users locally with goroutines, `fasthttp`, keep-alive reuse, and pooled request/response objects.
 - **Realtime feedback**: Track RPS, latency, failures, status code counts, and bounded live chart data through batched Wails events.
+- **Shareable local reports**: Export completed runs as redacted JSON reports with summary metrics, error breakdowns, status codes, and timeline points.
+- **SLO gates**: Configure failure-rate, latency, and RPS thresholds on the Metrics node and get pass/fail results locally or in exported k6 scripts.
+- **Regression awareness**: Completed runs are compared with the previous local baseline for the same scenario to flag RPS, latency, and failure-rate changes.
+- **k6 handoff**: Export visual scenarios to k6 JavaScript for CI runs or distributed execution outside the desktop app.
 - **Privacy-first workflow**: Scenario data, target URLs, auth values, and metrics are handled locally instead of being uploaded to a FlowRoutine cloud service.
 
 ## Quick Start
@@ -46,10 +52,13 @@ go build ./...
 | Area | What works |
 | --- | --- |
 | Scenario canvas | Request, Engine, Metrics, Window, Delay, and Assert nodes |
-| Request setup | Method, URL, headers, body, auth helpers, and recent run loading |
+| Import | OpenAPI / Swagger URL import, Postman Collection v2 JSON import, and browser HAR import |
+| Request setup | Method, URL, headers, body, auth helpers, JSON capture variables, and recent run loading |
 | Execution | Linear path execution from Request through Engine, with Delay and Assert support |
 | Engine | Go virtual users, RPS cap, ramp-up, timeouts, max connections, keep-alive reuse |
 | Metrics | RPS, total/success/failed counts, latency percentiles, transport failures, HTTP status breakdown |
+| Reports | Completed-run JSON export with SLO pass/fail, local baseline comparison, redacted sensitive headers, and body-size metadata |
+| Interop | k6 JavaScript export with thresholds and sensitive headers mapped to environment variables |
 | UI | Node help, Korean/English descriptions, adjustable chart window, wheel zoom, edge deletion |
 
 ## Architecture
@@ -97,11 +106,9 @@ Load testing can disrupt real services. FlowRoutine includes RPS caps, ramp-up c
 
 ## Roadmap
 
-- Import OpenAPI / Swagger endpoints into Request nodes.
 - Add a manual scenario library with named saves beyond recent-run history.
 - Support branching and multiple scenario paths.
 - Add richer assertions for headers, bodies, and latency thresholds.
-- Export scenarios to k6 JavaScript.
 - Improve packaged desktop builds for macOS, Windows, and Linux.
 
 ## Current Limits

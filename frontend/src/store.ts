@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { applyBaselineComparison, buildRunReport, type RunReport } from "./report";
 import type { FlowSettings, Header, MetricsBatch, StartRequest } from "./types";
 
 export const DEFAULT_METRIC_WINDOW_MS = 60_000;
@@ -33,10 +34,14 @@ type LoadState = {
 type MetricsState = {
   points: MetricsBatch[];
   latest: MetricsBatch | null;
+  latestReport: RunReport | null;
   metricWindowMs: number;
+  beginRun: (request: StartRequest) => void;
   pushBatch: (batch: MetricsBatch) => void;
   setMetricWindowMs: (metricWindowMs: number) => void;
   reset: () => void;
+  activeRequest: StartRequest | null;
+  runPoints: MetricsBatch[];
 };
 
 export const useLoadStore = create<LoadState>((set, get) => ({
@@ -82,13 +87,24 @@ export const useLoadStore = create<LoadState>((set, get) => ({
 export const useMetricsStore = create<MetricsState>((set) => ({
   points: [],
   latest: null,
+  latestReport: null,
   metricWindowMs: DEFAULT_METRIC_WINDOW_MS,
+  activeRequest: null,
+  runPoints: [],
+  beginRun: (request) => set({ points: [], latest: null, latestReport: null, activeRequest: request, runPoints: [] }),
   pushBatch: (batch) =>
     set((state) => {
       const cutoff = batch.timestampUnixMs - state.metricWindowMs;
+      const runPoints = state.activeRequest ? state.runPoints.concat(batch) : state.runPoints;
+      const completedReport = state.activeRequest && !batch.running
+        ? applyBaselineComparison(buildRunReport(state.activeRequest, runPoints), state.activeRequest)
+        : null;
       return {
         latest: batch,
         points: state.points.concat(batch).filter((point) => point.timestampUnixMs >= cutoff),
+        runPoints,
+        latestReport: completedReport ?? state.latestReport,
+        activeRequest: completedReport ? null : state.activeRequest,
       };
     }),
   setMetricWindowMs: (metricWindowMs) =>
@@ -102,7 +118,7 @@ export const useMetricsStore = create<MetricsState>((set) => ({
           : state.points.filter((point) => point.timestampUnixMs >= latestTimestamp - nextMetricWindowMs),
       };
     }),
-  reset: () => set({ points: [], latest: null }),
+  reset: () => set({ points: [], latest: null, activeRequest: null, runPoints: [] }),
 }));
 
 function parseHeaders(raw: string): Header[] {

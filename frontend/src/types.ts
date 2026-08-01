@@ -27,17 +27,32 @@ export type ScenarioStep = {
   method?: string;
   headers?: Header[];
   body?: string;
+  captures?: Capture[];
   delayMs?: number;
   expectedStatus?: string;
+};
+
+export type Capture = {
+  name: string;
+  path: string;
 };
 
 export type StartRequest = {
   config: LoadConfig;
   batchIntervalMs: number;
+  qualityGate?: QualityGate;
+};
+
+export type QualityGate = {
+  maxFailureRatePct: number;
+  maxP95LatencyMs: number;
+  maxP99LatencyMs: number;
+  minRps: number;
 };
 
 export type MetricsBatch = {
   timestampUnixMs: number;
+  startedAtUnixMs: number;
   running: boolean;
   rps: number;
   total: number;
@@ -65,6 +80,47 @@ export type StatusCodeCount = {
   count: number;
 };
 
+export type OpenAPIImportResponse = {
+  sourceUrl: string;
+  openapi: string;
+  title: string;
+  version: string;
+  servers: OpenAPIServer[];
+  endpoints: OpenAPIEndpoint[];
+  rawJson: unknown;
+};
+
+export type OpenAPIServer = {
+  url: string;
+  description: string;
+};
+
+export type OpenAPIEndpoint = {
+  method: string;
+  path: string;
+  summary: string;
+  operationId: string;
+  tags: string[];
+  serverUrl: string;
+  deprecated: boolean;
+  auth: OpenAPIAuth;
+  parameters: OpenAPIParameter[];
+  bodySample: string;
+};
+
+export type OpenAPIAuth = {
+  type: "none" | "bearer" | "apiKey" | "cookie";
+  name: string;
+};
+
+export type OpenAPIParameter = {
+  name: string;
+  in: string;
+  required: boolean;
+  description: string;
+  sample: string;
+};
+
 declare global {
   interface Window {
     go?: {
@@ -72,6 +128,7 @@ declare global {
         App?: {
           StartLoad?: (request: StartRequest) => Promise<unknown>;
           StopLoad?: () => Promise<void>;
+          ImportOpenAPI?: (url: string) => Promise<OpenAPIImportResponse>;
         };
       };
     };

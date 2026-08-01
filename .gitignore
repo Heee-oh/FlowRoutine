@@ -56,3 +56,4 @@ build/linux/
 Thumbs.db
 .idea/
 .vscode/
+.codegraph/

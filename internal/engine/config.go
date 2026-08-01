@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -55,6 +56,12 @@ type ScenarioStep struct {
 	Body           []byte
 	Delay          time.Duration
 	ExpectedStatus string
+	Captures       []VariableCapture
+}
+
+type VariableCapture struct {
+	Name string
+	Path string
 }
 
 type compiledConfig struct {
@@ -81,8 +88,9 @@ type compiledConfig struct {
 }
 
 type compiledHeader struct {
-	name  []byte
-	value []byte
+	name      []byte
+	value     []byte
+	templated bool
 }
 
 type compiledStepKind uint8
@@ -101,13 +109,21 @@ type compiledStep struct {
 }
 
 type compiledRequestStep struct {
-	clientIndex  int
-	requestURI   []byte
-	hostHeader   []byte
-	method       []byte
-	headers      []compiledHeader
-	body         []byte
-	requestBytes int
+	clientIndex         int
+	requestURI          []byte
+	requestURITemplated bool
+	hostHeader          []byte
+	method              []byte
+	headers             []compiledHeader
+	body                []byte
+	bodyTemplated       bool
+	requestBytes        int
+	captures            []compiledVariableCapture
+}
+
+type compiledVariableCapture struct {
+	name string
+	path []string
 }
 
 type compiledClient struct {
@@ -267,6 +283,11 @@ func compileRequestStep(step ScenarioStep, target *url.URL, defaultMethod string
 	}
 	body := make([]byte, len(step.Body))
 	copy(body, step.Body)
+	captures, err := compileVariableCaptures(step.Captures)
+	if err != nil {
+		return compiledRequestStep{}, err
+	}
+	uri := requestURI(target)
 
 	requestBytes := len(method) + len(step.URL) + len(body)
 	for _, h := range headers {
@@ -274,13 +295,16 @@ func compileRequestStep(step ScenarioStep, target *url.URL, defaultMethod string
 	}
 
 	return compiledRequestStep{
-		clientIndex:  clientIndex,
-		requestURI:   []byte(requestURI(target)),
-		hostHeader:   []byte(target.Host),
-		method:       []byte(method),
-		headers:      headers,
-		body:         body,
-		requestBytes: requestBytes,
+		clientIndex:         clientIndex,
+		requestURI:          []byte(uri),
+		requestURITemplated: hasTemplate(uri),
+		hostHeader:          []byte(target.Host),
+		method:              []byte(method),
+		headers:             headers,
+		body:                body,
+		bodyTemplated:       hasTemplate(string(body)),
+		requestBytes:        requestBytes,
+		captures:            captures,
 	}, nil
 }
 
@@ -291,11 +315,32 @@ func compileHeaders(headers []Header) ([]compiledHeader, error) {
 			return nil, errors.New("header name is required")
 		}
 		compiled = append(compiled, compiledHeader{
-			name:  []byte(h.Name),
-			value: []byte(h.Value),
+			name:      []byte(h.Name),
+			value:     []byte(h.Value),
+			templated: hasTemplate(h.Value),
 		})
 	}
 	return compiled, nil
+}
+
+func compileVariableCaptures(captures []VariableCapture) ([]compiledVariableCapture, error) {
+	compiled := make([]compiledVariableCapture, 0, len(captures))
+	for _, capture := range captures {
+		name := strings.TrimSpace(capture.Name)
+		path := strings.TrimSpace(capture.Path)
+		if name == "" && path == "" {
+			continue
+		}
+		if name == "" || path == "" {
+			return nil, errors.New("capture name and path are required")
+		}
+		compiled = append(compiled, compiledVariableCapture{name: name, path: strings.Split(path, ".")})
+	}
+	return compiled, nil
+}
+
+func hasTemplate(value string) bool {
+	return strings.Contains(value, "{{") && strings.Contains(value, "}}")
 }
 
 func firstCompiledRequest(steps []compiledStep) compiledRequestStep {
