@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   assessStartSafety,
@@ -7,11 +7,10 @@ import {
   createSavedScenario,
   initialFlowEdges,
   initialFlowNodes,
-  loadSavedScenarios,
   parseCaptureText,
 } from "./flowModel";
 import { buildK6Script } from "./k6Export";
-import type { EnvironmentProfile, FlowNodeData, SavedScenario } from "./flowTypes";
+import type { EnvironmentProfile, FlowNodeData } from "./flowTypes";
 import type { LoadConfig, PreflightResponse, StartRequest } from "./types";
 
 describe("assessStartSafety", () => {
@@ -69,10 +68,6 @@ describe("assessStartSafety", () => {
 });
 
 describe("scenario secret handling", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it("persists placeholders instead of literal node secrets", () => {
     const node = {
       id: "request-1",
@@ -95,41 +90,6 @@ describe("scenario secret handling", () => {
     expect(serialized).toContain("SECRET_AUTHORIZATION");
     expect(serialized).toContain("SECRET_X_API_KEY");
     expect(serialized).toContain("SECRET_PASSWORD");
-  });
-
-  it("sanitizes legacy scenarios when loading and still returns them if migration writes fail", () => {
-    const legacy: SavedScenario = {
-      id: "legacy",
-      name: "legacy",
-      savedAtUnixMs: 1,
-      nodes: [{
-        id: "request-1",
-        type: "flow",
-        position: { x: 0, y: 0 },
-        data: requestNodeData(),
-      }],
-      edges: [],
-    };
-    const setItem = vi.fn((_key: string, _value: string) => {
-      throw new Error("storage full");
-    });
-    const removeItem = vi.fn();
-    vi.stubGlobal("window", {
-      localStorage: {
-        getItem: () => JSON.stringify([legacy]),
-        setItem,
-        removeItem,
-      },
-    });
-
-    const loaded = loadSavedScenarios();
-    const serialized = JSON.stringify(loaded);
-
-    expect(loaded).toHaveLength(1);
-    expect(serialized).not.toMatch(/saved-(?:url|header|row|body|direct)-secret/);
-    expect(setItem).toHaveBeenCalledOnce();
-    expect(setItem.mock.calls[0][1]).not.toMatch(/saved-(?:url|header|row|body|direct)-secret/);
-    expect(removeItem).toHaveBeenCalledWith("flowroutine:saved-scenarios");
   });
 
   it("resolves runtime bindings for execution without storing them in nodes", () => {

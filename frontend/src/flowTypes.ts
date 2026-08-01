@@ -109,9 +109,24 @@ export type SafetyAssessment = {
 };
 
 export type SavedScenario = {
+  schemaVersion: 2;
   id: string;
   name: string;
-  savedAtUnixMs: number;
+  tags: string[];
+  createdAtUnixMs: number;
+  updatedAtUnixMs: number;
+  environmentProfileId?: string;
+  nodes: Node<FlowNodeData>[];
+  edges: Edge[];
+};
+
+export type ScenarioDraft = {
+  schemaVersion: 2;
+  activeScenarioId?: string;
+  name: string;
+  tags: string[];
+  createdAtUnixMs: number;
+  updatedAtUnixMs: number;
   environmentProfileId?: string;
   nodes: Node<FlowNodeData>[];
   edges: Edge[];

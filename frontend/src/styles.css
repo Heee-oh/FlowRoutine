@@ -97,7 +97,8 @@ small,
   gap: 14px;
 }
 
-.environment-panel {
+.environment-panel,
+.scenario-library-panel {
   display: grid;
   gap: 12px;
   margin-bottom: 18px;
@@ -108,14 +109,17 @@ small,
 }
 
 .environment-heading,
-.environment-heading-actions {
+.environment-heading-actions,
+.scenario-library-heading,
+.scenario-library-heading-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.environment-heading-actions .icon-button {
+.environment-heading-actions .icon-button,
+.scenario-library-heading-actions .icon-button {
   width: 34px;
   height: 34px;
   min-height: 34px;
@@ -150,23 +154,32 @@ small,
   line-height: 1.45;
 }
 
-.saved-scenarios {
+.scenario-library-file-actions {
   display: grid;
-  gap: 10px;
-}
-
-.saved-scenario-list {
-  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 
-.saved-scenario-scroll {
-  max-height: 378px;
+.scenario-library-file-actions button {
+  min-height: 34px;
+  font-size: 12px;
+}
+
+.scenario-library-list {
+  display: grid;
+  max-height: 240px;
   overflow-y: auto;
+  gap: 7px;
   padding-right: 4px;
 }
 
-.saved-scenario-button {
+.scenario-library-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 6px;
+}
+
+.scenario-library-load {
   display: grid;
   justify-items: start;
   gap: 3px;
@@ -175,22 +188,34 @@ small,
   text-align: left;
 }
 
-.saved-scenario-button span,
-.saved-scenario-button small {
+.scenario-library-row.active .scenario-library-load {
+  border-color: rgba(57, 208, 163, 0.62);
+  background: rgba(57, 208, 163, 0.08);
+}
+
+.scenario-library-load span,
+.scenario-library-load small {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.saved-scenario-button span {
+.scenario-library-load span {
   color: var(--text);
   font-size: 13px;
 }
 
-.saved-scenario-button small {
+.scenario-library-load small {
   color: var(--muted);
   font-size: 11px;
+}
+
+.scenario-library-delete {
+  width: 34px;
+  min-height: 0;
+  padding: 0;
+  color: var(--danger);
 }
 
 label,

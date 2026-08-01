@@ -24,6 +24,7 @@ Built with OpenAI Codex assistance.
 - **Postman/OpenAPI/HAR import**: Turn Postman Collection v2 JSON files, OpenAPI or Swagger JSON/YAML endpoints, or browser HAR captures into runnable scenario nodes.
 - **Stateful API flows**: Capture JSON response values and reuse them as `{{variables}}` in later request URLs, headers, or bodies.
 - **Named environments**: Switch `{{BASE_URL}}` and uppercase variables per profile while keeping `SECRET_*` values memory-only.
+- **Versioned scenario library**: Name and tag scenarios, recover autosaved drafts, migrate older saves, undo destructive graph changes, and exchange sanitized JSON files.
 - **Local load engine**: Run staged virtual-user or arrival-rate profiles locally with goroutines, `fasthttp`, keep-alive reuse, and pooled request/response objects.
 - **Realtime feedback**: Track RPS, latency, failures, status code counts, and bounded live chart data through batched Wails events.
 - **Shareable local reports**: Export completed runs as redacted JSON reports with summary metrics, error breakdowns, status codes, and timeline points.
@@ -54,7 +55,7 @@ go build ./...
 | --- | --- |
 | Scenario canvas | Request, Engine, Metrics, Window, Delay, and Assert nodes |
 | Import | OpenAPI / Swagger JSON or YAML URL import, Postman Collection v2 JSON import, and browser HAR import |
-| Request setup | Named environments, method, URL, headers, body, auth helpers, JSON capture variables, and recent run loading |
+| Request setup | Named environments, versioned scenario library, method, URL, headers, body, auth helpers, and JSON capture variables |
 | Execution | Linear path execution from Request through Engine, with Delay and typed Assert support |
 | Engine | Constant/ramping VUs, constant/ramping arrival rate, graceful stop, RPS cap, timeouts, max connections, keep-alive reuse |
 | Metrics | RPS, aggregate and request-step counts, latency percentiles, transport failures, typed assertion failures, dropped iterations, and HTTP status diagnostics |
@@ -103,8 +104,14 @@ resolved nodes; cyclic or unresolved references fail without returning the sourc
 
 Postman and HAR imports are capped at 5 MiB, 64 JSON nesting levels, and 500 runnable requests. Valid files
 open a searchable selection preview before any graph state changes. Append inserts requests before Engine;
-replace requires an explicit destructive choice. A successful import is one-step undoable, while read, parse,
-validation, and graph-compilation failures leave the active graph and runtime secrets unchanged.
+replace requires an explicit destructive choice. Successful imports enter the bounded undo history, while read,
+parse, validation, and graph-compilation failures leave the active graph and runtime secrets unchanged.
+
+The scenario library stores schema-versioned named entries with tags plus created/updated timestamps. The active
+draft is sanitized and autosaved after edits, then flushed on application close so an invalid or not-yet-run graph
+can still be recovered. Legacy recent-run entries migrate to schema v2. Scenario JSON import/export uses the same
+sanitization and a 5 MiB limit. A bounded 50-entry in-memory history covers imports, graph replacement, and node or
+edge deletion; library deletion has a separate immediate undo action.
 
 Engine counters use `min(VUs, 4 × GOMAXPROCS, 256)` stable stripes. Status-code and latency-histogram storage,
 snapshot scans, and reset work therefore stop growing with virtual users after the CPU-scaled stripe cap.
@@ -183,7 +190,6 @@ Load testing can disrupt real services. FlowRoutine includes RPS caps, ramp-up c
 
 ## Roadmap
 
-- Add a manual scenario library with named saves beyond recent-run history.
 - Support branching and multiple scenario paths.
 - Improve packaged desktop builds for macOS, Windows, and Linux.
 

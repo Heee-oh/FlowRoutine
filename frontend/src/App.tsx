@@ -3,12 +3,13 @@ import {
   addEdge,
   type Connection,
   type Edge,
+  type EdgeChange,
   type Node,
   type NodeChange,
   useEdgesState,
   useNodesState,
 } from "@xyflow/react";
-import { FileCode, HelpCircle, Play, Square, Workflow } from "lucide-react";
+import { FileCode, HelpCircle, Play, Redo2, Square, Undo2, Workflow } from "lucide-react";
 import { EnvironmentPanel } from "./components/EnvironmentPanel";
 import { FlowCanvas } from "./components/FlowCanvas";
 import { HelpDialog, OpenAPIImportDialog, StartConfirmDialog } from "./components/Dialogs";
@@ -17,6 +18,7 @@ import { MetricGrid, MetricsChart } from "./components/Metrics";
 import { NodeInspector } from "./components/NodeInspector";
 import { NodePalette } from "./components/NodePalette";
 import { ScenarioPath } from "./components/ScenarioPath";
+import { ScenarioLibraryPanel } from "./components/ScenarioLibraryPanel";
 import {
   createEnvironmentProfile,
   loadActiveEnvironmentId,
@@ -29,15 +31,14 @@ import {
   buildStartRequestFromGraph,
   createFlowNode,
   createSavedScenario,
+  createScenarioSnapshot,
   getMetricWindowMs,
   initialFlowEdges,
   initialFlowNodes,
-  loadSavedScenarios,
   nextNodeIndexFromNodes,
   openAPIEndpointToRequestSettings,
   refreshNodeDisplay,
   reviveSavedNodes,
-  saveScenario,
 } from "./flowModel";
 import type {
   EnvironmentProfile,
@@ -47,6 +48,11 @@ import type {
   SafetyAssessment,
   SavedScenario,
 } from "./flowTypes";
+import {
+  BoundedHistory,
+  createGraphSnapshot,
+  type GraphSnapshot,
+} from "./graphHistory";
 import { validateScenarioGraph } from "./graphCompiler";
 import { parseHarArchive } from "./harImport";
 import type { HelpLanguage, HelpTopic } from "./help";
@@ -62,6 +68,17 @@ import { assertImportFileSize } from "./importValidation";
 import { downloadK6Script } from "./k6Export";
 import { parsePostmanCollection } from "./postmanImport";
 import { purgeLegacyRunBaselines } from "./report";
+import {
+  deleteScenario,
+  downloadScenarioFile,
+  formatScenarioTags,
+  loadScenarioDraft,
+  loadScenarioLibrary,
+  parseScenarioFile,
+  parseScenarioTags,
+  saveScenario,
+  saveScenarioDraft,
+} from "./scenarioLibrary";
 import { DEFAULT_METRIC_WINDOW_MS, useLoadStore, useMetricsStore } from "./store";
 import type {
   OpenAPIEndpoint,
@@ -70,15 +87,6 @@ import type {
   StartRequest,
 } from "./types";
 import { importOpenAPI, onMetricsBatch, preflightLoad, startLoad, stopLoad } from "./wails";
-
-type ImportUndo = {
-  authSecrets: Record<string, RuntimeAuthSecret>;
-  edges: Edge[];
-  message: string;
-  nextNodeIndex: number;
-  nodes: Node<FlowNodeData>[];
-  selectedNodeId: string | null;
-};
 
 export function App() {
   const running = useLoadStore((state) => state.running);
@@ -92,6 +100,7 @@ export function App() {
   const beginMetricsRun = useMetricsStore((state) => state.beginRun);
   const resetMetrics = useMetricsStore((state) => state.reset);
   const setMetricWindowMs = useMetricsStore((state) => state.setMetricWindowMs);
+  const [initialDraft] = useState(loadScenarioDraft);
   const [pendingStart, setPendingStart] = useState<StartRequest | null>(null);
   const [pendingSafety, setPendingSafety] = useState<SafetyAssessment | null>(null);
   const [pendingScenario, setPendingScenario] = useState<SavedScenario | null>(null);
@@ -104,17 +113,38 @@ export function App() {
   const [openAPIImported, setOpenAPIImported] = useState<OpenAPIImportResponse | null>(null);
   const [pendingRequestImport, setPendingRequestImport] = useState<RequestImportPreview | null>(null);
   const [requestImportError, setRequestImportError] = useState("");
-  const [importUndo, setImportUndo] = useState<ImportUndo | null>(null);
-  const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>(loadSavedScenarios);
+  const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>(loadScenarioLibrary);
+  const [activeScenarioId, setActiveScenarioId] = useState<string | null>(initialDraft?.activeScenarioId ?? null);
+  const [scenarioName, setScenarioName] = useState(initialDraft?.name ?? "Untitled scenario");
+  const [scenarioTagsText, setScenarioTagsText] = useState(
+    initialDraft ? formatScenarioTags(initialDraft.tags) : "",
+  );
+  const [scenarioCreatedAtUnixMs, setScenarioCreatedAtUnixMs] = useState(
+    initialDraft?.createdAtUnixMs ?? Date.now(),
+  );
+  const [deletedScenario, setDeletedScenario] = useState<{
+    scenario: SavedScenario;
+    wasActive: boolean;
+  } | null>(null);
+  const [historyNotice, setHistoryNotice] = useState("");
   const [authSecrets, setAuthSecrets] = useState<Record<string, RuntimeAuthSecret>>({});
   const [environmentProfiles, setEnvironmentProfiles] = useState<EnvironmentProfile[]>(loadEnvironmentProfiles);
-  const [activeEnvironmentId, setActiveEnvironmentId] = useState<string | null>(loadActiveEnvironmentId);
+  const [activeEnvironmentId, setActiveEnvironmentId] = useState<string | null>(
+    () => initialDraft?.environmentProfileId ?? loadActiveEnvironmentId(),
+  );
   const [environmentSecrets, setEnvironmentSecrets] = useState<Record<string, Record<string, string>>>({});
-  const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<Node<FlowNodeData>>(initialFlowNodes);
-  const [flowEdges, setFlowEdges, onFlowEdgesChange] = useEdgesState<Edge>(initialFlowEdges);
+  const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<Node<FlowNodeData>>(
+    initialDraft?.nodes ?? initialFlowNodes,
+  );
+  const [flowEdges, setFlowEdges, onFlowEdgesChange] = useEdgesState<Edge>(
+    initialDraft?.edges ?? initialFlowEdges,
+  );
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const nextNodeIndex = useRef(initialFlowNodes.length);
+  const nextNodeIndex = useRef(nextNodeIndexFromNodes(initialDraft?.nodes ?? initialFlowNodes));
   const nextRequestImportId = useRef(1);
+  const graphHistory = useRef(new BoundedHistory<GraphSnapshot>(50));
+  const historyCapturePending = useRef(false);
+  const [, refreshHistory] = useState(0);
   const selectedNode = useMemo(
     () => flowNodes.find((node) => node.id === selectedNodeId) ?? null,
     [flowNodes, selectedNodeId],
@@ -123,6 +153,52 @@ export function App() {
     () => environmentProfiles.find((profile) => profile.id === activeEnvironmentId) ?? null,
     [activeEnvironmentId, environmentProfiles],
   );
+  const workspaceRef = useRef<GraphSnapshot>({
+    nodes: flowNodes,
+    edges: flowEdges,
+    authSecrets,
+    selectedNodeId,
+    nextNodeIndex: nextNodeIndex.current,
+    scenario: {
+      activeScenarioId,
+      name: scenarioName,
+      tagsText: scenarioTagsText,
+      createdAtUnixMs: scenarioCreatedAtUnixMs,
+      activeEnvironmentId,
+    },
+  });
+  workspaceRef.current = {
+    nodes: flowNodes,
+    edges: flowEdges,
+    authSecrets,
+    selectedNodeId,
+    nextNodeIndex: nextNodeIndex.current,
+    scenario: {
+      activeScenarioId,
+      name: scenarioName,
+      tagsText: scenarioTagsText,
+      createdAtUnixMs: scenarioCreatedAtUnixMs,
+      activeEnvironmentId,
+    },
+  };
+  const draftRef = useRef<Parameters<typeof saveScenarioDraft>[0]>({
+    ...(activeScenarioId ? { activeScenarioId } : {}),
+    name: scenarioName,
+    tags: parseScenarioTags(scenarioTagsText),
+    createdAtUnixMs: scenarioCreatedAtUnixMs,
+    ...(activeEnvironmentId ? { environmentProfileId: activeEnvironmentId } : {}),
+    nodes: flowNodes,
+    edges: flowEdges,
+  });
+  draftRef.current = {
+    ...(activeScenarioId ? { activeScenarioId } : {}),
+    name: scenarioName,
+    tags: parseScenarioTags(scenarioTagsText),
+    createdAtUnixMs: scenarioCreatedAtUnixMs,
+    ...(activeEnvironmentId ? { environmentProfileId: activeEnvironmentId } : {}),
+    nodes: flowNodes,
+    edges: flowEdges,
+  };
   const graphValidation = useMemo(
     () => validateScenarioGraph(flowNodes, flowEdges),
     [flowEdges, flowNodes],
@@ -170,7 +246,51 @@ export function App() {
     setMetricWindowMs(activeMetricWindowMs);
   }, [activeMetricWindowMs, setMetricWindowMs]);
 
+  useEffect(() => {
+    const timeout = window.setTimeout(() => saveScenarioDraft(draftRef.current), 300);
+    return () => window.clearTimeout(timeout);
+  }, [
+    activeEnvironmentId,
+    activeScenarioId,
+    flowEdges,
+    flowNodes,
+    scenarioCreatedAtUnixMs,
+    scenarioName,
+    scenarioTagsText,
+  ]);
+
+  useEffect(() => {
+    const flushDraft = () => saveScenarioDraft(draftRef.current);
+    window.addEventListener("beforeunload", flushDraft);
+    return () => {
+      window.removeEventListener("beforeunload", flushDraft);
+      flushDraft();
+    };
+  }, []);
+
+  const recordGraphChange = useCallback((label: string, coalesce = false) => {
+    if (coalesce && historyCapturePending.current) {
+      return;
+    }
+    graphHistory.current.record(createGraphSnapshot(workspaceRef.current), label);
+    setHistoryNotice(label);
+    refreshHistory((version) => version + 1);
+    if (coalesce) {
+      historyCapturePending.current = true;
+      queueMicrotask(() => {
+        historyCapturePending.current = false;
+      });
+    }
+  }, []);
+
+  const invalidateRedo = useCallback(() => {
+    if (graphHistory.current.clearRedo()) {
+      refreshHistory((version) => version + 1);
+    }
+  }, []);
+
   const handleDeleteNode = useCallback((nodeId: string) => {
+    recordGraphChange("Deleted node", true);
     setFlowNodes((currentNodes) => currentNodes.filter((node) => node.id !== nodeId));
     setFlowEdges((currentEdges) => currentEdges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
     setSelectedNodeId((current) => (current === nodeId ? null : current));
@@ -178,7 +298,7 @@ export function App() {
       const { [nodeId]: _deleted, ...rest } = current;
       return rest;
     });
-  }, [setFlowEdges, setFlowNodes]);
+  }, [recordGraphChange, setFlowEdges, setFlowNodes]);
 
   useEffect(() => {
     setFlowNodes((currentNodes) => currentNodes.map((node) => ({
@@ -190,16 +310,63 @@ export function App() {
     })));
   }, [handleDeleteNode, setFlowNodes]);
 
+  const applyWorkspaceSnapshot = useCallback((snapshot: GraphSnapshot) => {
+    setFlowNodes(reviveSavedNodes(snapshot.nodes, handleDeleteNode));
+    setFlowEdges(snapshot.edges);
+    setAuthSecrets(snapshot.authSecrets);
+    setSelectedNodeId(snapshot.selectedNodeId);
+    nextNodeIndex.current = snapshot.nextNodeIndex;
+    setActiveScenarioId(snapshot.scenario.activeScenarioId);
+    setScenarioName(snapshot.scenario.name);
+    setScenarioTagsText(snapshot.scenario.tagsText);
+    setScenarioCreatedAtUnixMs(snapshot.scenario.createdAtUnixMs);
+    setActiveEnvironmentId(snapshot.scenario.activeEnvironmentId);
+    saveActiveEnvironmentId(snapshot.scenario.activeEnvironmentId);
+    setError("");
+  }, [handleDeleteNode, setError, setFlowEdges, setFlowNodes]);
+
+  const handleUndo = useCallback(() => {
+    const entry = graphHistory.current.undo(createGraphSnapshot(workspaceRef.current));
+    if (!entry) {
+      return;
+    }
+    applyWorkspaceSnapshot(entry.value);
+    setHistoryNotice(`Undid: ${entry.label}`);
+    refreshHistory((version) => version + 1);
+  }, [applyWorkspaceSnapshot]);
+
+  const handleRedo = useCallback(() => {
+    const entry = graphHistory.current.redo(createGraphSnapshot(workspaceRef.current));
+    if (!entry) {
+      return;
+    }
+    applyWorkspaceSnapshot(entry.value);
+    setHistoryNotice(`Redid: ${entry.label}`);
+    refreshHistory((version) => version + 1);
+  }, [applyWorkspaceSnapshot]);
+
   const handleAddNode = useCallback((kind: FlowNodeKind) => {
+    invalidateRedo();
     const index = nextNodeIndex.current;
     nextNodeIndex.current += 1;
     setFlowNodes((currentNodes) => currentNodes.concat(createFlowNode(kind, index, null, undefined, handleDeleteNode)));
-  }, [handleDeleteNode, setFlowNodes]);
+  }, [handleDeleteNode, invalidateRedo, setFlowNodes]);
 
   const handleSelectEnvironment = useCallback((id: string | null) => {
+    invalidateRedo();
     setActiveEnvironmentId(id);
     saveActiveEnvironmentId(id);
-  }, []);
+  }, [invalidateRedo]);
+
+  const handleScenarioNameChange = useCallback((name: string) => {
+    invalidateRedo();
+    setScenarioName(name);
+  }, [invalidateRedo]);
+
+  const handleScenarioTagsChange = useCallback((tags: string) => {
+    invalidateRedo();
+    setScenarioTagsText(tags);
+  }, [invalidateRedo]);
 
   const handleAddEnvironment = useCallback(() => {
     const profile = createEnvironmentProfile(environmentProfiles.length + 1);
@@ -247,12 +414,17 @@ export function App() {
     });
   }, [activeEnvironmentId]);
 
-  const handleLoadScenario = useCallback((scenario: SavedScenario) => {
+  const applyScenario = useCallback((scenario: SavedScenario, nextActiveScenarioId: string | null) => {
+    setError("");
     const nodes = reviveSavedNodes(scenario.nodes, handleDeleteNode);
     setFlowNodes(nodes);
     setFlowEdges(scenario.edges);
     setSelectedNodeId(null);
     setAuthSecrets({});
+    setActiveScenarioId(nextActiveScenarioId);
+    setScenarioName(scenario.name);
+    setScenarioTagsText(formatScenarioTags(scenario.tags));
+    setScenarioCreatedAtUnixMs(scenario.createdAtUnixMs);
     if (scenario.environmentProfileId) {
       if (environmentProfiles.some((profile) => profile.id === scenario.environmentProfileId)) {
         handleSelectEnvironment(scenario.environmentProfileId);
@@ -260,11 +432,117 @@ export function App() {
         handleSelectEnvironment(null);
         setError("The environment profile saved with this scenario is unavailable; select another profile.");
       }
+    } else {
+      handleSelectEnvironment(null);
     }
     nextNodeIndex.current = nextNodeIndexFromNodes(nodes);
   }, [environmentProfiles, handleDeleteNode, handleSelectEnvironment, setError, setFlowEdges, setFlowNodes]);
 
+  const persistScenario = useCallback((scenario: SavedScenario) => {
+    invalidateRedo();
+    setSavedScenarios((current) => saveScenario(scenario, current));
+    setActiveScenarioId(scenario.id);
+    setScenarioName(scenario.name);
+    setScenarioTagsText(formatScenarioTags(scenario.tags));
+    setScenarioCreatedAtUnixMs(scenario.createdAtUnixMs);
+  }, [invalidateRedo]);
+
+  const currentScenarioSnapshot = useCallback(() => {
+    if (!scenarioName.trim()) {
+      throw new Error("Scenario name is required");
+    }
+    return createScenarioSnapshot(flowNodes, flowEdges, {
+      ...(activeScenarioId ? { id: activeScenarioId } : {}),
+      name: scenarioName,
+      tags: parseScenarioTags(scenarioTagsText),
+      createdAtUnixMs: scenarioCreatedAtUnixMs,
+      ...(activeEnvironmentId ? { environmentProfileId: activeEnvironmentId } : {}),
+    });
+  }, [activeEnvironmentId, activeScenarioId, flowEdges, flowNodes, scenarioCreatedAtUnixMs, scenarioName, scenarioTagsText]);
+
+  const handleSaveScenario = useCallback(() => {
+    try {
+      const scenario = currentScenarioSnapshot();
+      persistScenario(scenario);
+      setDeletedScenario(null);
+      setHistoryNotice(`Saved: ${scenario.name}`);
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save scenario");
+    }
+  }, [currentScenarioSnapshot, persistScenario, setError]);
+
+  const handleLoadScenario = useCallback((scenario: SavedScenario) => {
+    recordGraphChange(`Loaded scenario: ${scenario.name}`);
+    applyScenario(scenario, scenario.id);
+    setDeletedScenario(null);
+    setHistoryNotice(`Loaded: ${scenario.name}`);
+  }, [applyScenario, recordGraphChange]);
+
+  const handleNewScenario = useCallback(() => {
+    recordGraphChange("Created new scenario");
+    const nodes = reviveSavedNodes(initialFlowNodes, handleDeleteNode);
+    setFlowNodes(nodes);
+    setFlowEdges(initialFlowEdges.map((edge) => ({ ...edge })));
+    setSelectedNodeId(null);
+    setAuthSecrets({});
+    setActiveScenarioId(null);
+    setScenarioName("Untitled scenario");
+    setScenarioTagsText("");
+    setScenarioCreatedAtUnixMs(Date.now());
+    nextNodeIndex.current = nextNodeIndexFromNodes(nodes);
+    setDeletedScenario(null);
+    setError("");
+  }, [handleDeleteNode, recordGraphChange, setError, setFlowEdges, setFlowNodes]);
+
+  const handleDeleteScenario = useCallback((scenario: SavedScenario) => {
+    invalidateRedo();
+    setSavedScenarios((current) => deleteScenario(scenario.id, current));
+    const wasActive = activeScenarioId === scenario.id;
+    if (wasActive) {
+      setActiveScenarioId(null);
+    }
+    setDeletedScenario({ scenario, wasActive });
+    setHistoryNotice(`Deleted library entry: ${scenario.name}`);
+  }, [activeScenarioId, invalidateRedo]);
+
+  const handleUndoScenarioDelete = useCallback(() => {
+    if (!deletedScenario) {
+      return;
+    }
+    invalidateRedo();
+    setSavedScenarios((current) => saveScenario(deletedScenario.scenario, current));
+    if (deletedScenario.wasActive) {
+      setActiveScenarioId(deletedScenario.scenario.id);
+    }
+    setHistoryNotice(`Restored library entry: ${deletedScenario.scenario.name}`);
+    setDeletedScenario(null);
+  }, [deletedScenario, invalidateRedo]);
+
+  const handleExportScenario = useCallback(() => {
+    try {
+      downloadScenarioFile(currentScenarioSnapshot());
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to export scenario");
+    }
+  }, [currentScenarioSnapshot, setError]);
+
+  const handleImportScenario = useCallback(async (file: File) => {
+    try {
+      assertImportFileSize(file.size, "Scenario file");
+      const imported = parseScenarioFile(await file.text());
+      recordGraphChange(`Imported scenario file: ${file.name}`);
+      applyScenario(imported, null);
+      setDeletedScenario(null);
+      setHistoryNotice(`Imported as draft: ${imported.name}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to import scenario file");
+    }
+  }, [applyScenario, recordGraphChange, setError]);
+
   const updateAuthSecret = useCallback((nodeId: string, patch: Partial<RuntimeAuthSecret>) => {
+    invalidateRedo();
     setAuthSecrets((current) => ({
       ...current,
       [nodeId]: {
@@ -272,13 +550,27 @@ export function App() {
         ...patch,
       },
     }));
-  }, []);
+  }, [invalidateRedo]);
 
   const handleConnect = useCallback((connection: Connection) => {
+    invalidateRedo();
     setFlowEdges((currentEdges) => addEdge(connection, currentEdges));
-  }, [setFlowEdges]);
+  }, [invalidateRedo, setFlowEdges]);
 
   const handleNodeChanges = useCallback((changes: NodeChange<Node<FlowNodeData>>[]) => {
+    const removedNodeIds = changes.flatMap((change) => change.type === "remove" ? [change.id] : []);
+    if (removedNodeIds.length > 0) {
+      recordGraphChange("Deleted graph selection", true);
+      const removed = new Set(removedNodeIds);
+      setFlowEdges((currentEdges) => currentEdges.filter(
+        (edge) => !removed.has(edge.source) && !removed.has(edge.target),
+      ));
+      setAuthSecrets((current) => Object.fromEntries(
+        Object.entries(current).filter(([nodeId]) => !removed.has(nodeId)),
+      ));
+    } else if (changes.some((change) => change.type !== "select")) {
+      invalidateRedo();
+    }
     onFlowNodesChange(changes);
     for (const change of changes) {
       if ("id" in change && change.type === "select" && change.selected) {
@@ -289,7 +581,16 @@ export function App() {
     if (changes.some((change) => "id" in change && change.type === "remove" && change.id === selectedNodeId)) {
       setSelectedNodeId(null);
     }
-  }, [onFlowNodesChange, selectedNodeId]);
+  }, [invalidateRedo, onFlowNodesChange, recordGraphChange, selectedNodeId, setFlowEdges]);
+
+  const handleEdgeChanges = useCallback((changes: EdgeChange[]) => {
+    if (changes.some((change) => change.type === "remove")) {
+      recordGraphChange("Deleted connection", true);
+    } else if (changes.some((change) => change.type !== "select")) {
+      invalidateRedo();
+    }
+    onFlowEdgesChange(changes);
+  }, [invalidateRedo, onFlowEdgesChange, recordGraphChange]);
 
   const handlePaneClick = useCallback(() => {
     setSelectedNodeId(null);
@@ -299,6 +600,7 @@ export function App() {
     if (!selectedNodeId) {
       return;
     }
+    invalidateRedo();
     setFlowNodes((currentNodes) => currentNodes.map((node) => {
       if (node.id !== selectedNodeId) {
         return node;
@@ -311,7 +613,7 @@ export function App() {
         },
       });
     }));
-  }, [selectedNodeId, setFlowNodes]);
+  }, [invalidateRedo, selectedNodeId, setFlowNodes]);
 
   const assertGraphValid = useCallback(() => {
     if (graphValidation.compiled) {
@@ -362,7 +664,18 @@ export function App() {
         },
         batchIntervalMs: preflight.effectiveBatchIntervalMs,
       };
-      const scenario = createSavedScenario(flowNodes, flowEdges, request, activeEnvironment?.id);
+      const scenario = createSavedScenario(
+        flowNodes,
+        flowEdges,
+        request,
+        activeEnvironment?.id,
+        {
+          ...(activeScenarioId ? { id: activeScenarioId } : {}),
+          name: scenarioName,
+          tags: parseScenarioTags(scenarioTagsText),
+          createdAtUnixMs: scenarioCreatedAtUnixMs,
+        },
+      );
       const assessment = assessStartSafety(request.config, preflight);
       if (assessment.confirmationRequired) {
         setPendingStart(request);
@@ -370,14 +683,14 @@ export function App() {
         setPendingScenario(scenario);
         return;
       }
-      setSavedScenarios(saveScenario(scenario));
+      persistScenario(scenario);
       await executeStart(request);
     } catch (err) {
       setRunning(false);
       setStopping(false);
       setError(err instanceof Error ? err.message : "Failed to start load test");
     }
-  }, [activeEnvironment, assertGraphValid, authSecrets, buildStartRequest, environmentSecrets, executeStart, flowEdges, flowNodes, setError, setRunning, setStopping]);
+  }, [activeEnvironment, activeScenarioId, assertGraphValid, authSecrets, buildStartRequest, environmentSecrets, executeStart, flowEdges, flowNodes, persistScenario, scenarioCreatedAtUnixMs, scenarioName, scenarioTagsText, setError, setRunning, setStopping]);
 
   const handleStop = useCallback(async () => {
     if (stopping) {
@@ -424,10 +737,10 @@ export function App() {
     setPendingSafety(null);
     setPendingScenario(null);
     if (scenario) {
-      setSavedScenarios(saveScenario(scenario));
+      persistScenario(scenario);
     }
     void executeStart(request);
-  }, [executeStart, pendingScenario, pendingStart]);
+  }, [executeStart, pendingScenario, pendingStart, persistScenario]);
 
   const handleCancelStart = useCallback(() => {
     setPendingStart(null);
@@ -480,13 +793,14 @@ export function App() {
       undefined,
       handleDeleteNode,
     );
+    recordGraphChange("Imported OpenAPI request");
     setFlowNodes((currentNodes) => currentNodes.concat(node));
     setSelectedNodeId(node.id);
     setOpenAPIImportOpen(false);
     setOpenAPIImportError("");
     setOpenAPIImportMessage("");
     setOpenAPIImported(null);
-  }, [handleDeleteNode, openAPIImported, setFlowNodes]);
+  }, [handleDeleteNode, openAPIImported, recordGraphChange, setFlowNodes]);
 
   const prepareRequestImport = useCallback(async (source: RequestImportSource, file: File) => {
     const label = source === "Postman" ? "Postman collection" : "HAR file";
@@ -541,14 +855,8 @@ export function App() {
           nextNodeIndex.current,
           handleDeleteNode,
         );
-      setImportUndo({
-        authSecrets,
-        edges: flowEdges,
-        message: `${mode === "replace" ? "Replaced the graph with" : "Appended"} ${requests.length} ${pendingRequestImport.source} request${requests.length === 1 ? "" : "s"}.`,
-        nextNodeIndex: nextNodeIndex.current,
-        nodes: flowNodes,
-        selectedNodeId,
-      });
+      const historyLabel = `${mode === "replace" ? "Replaced graph with" : "Appended"} ${requests.length} ${pendingRequestImport.source} request${requests.length === 1 ? "" : "s"}`;
+      recordGraphChange(historyLabel);
       setFlowNodes(importedGraph.nodes);
       setFlowEdges(importedGraph.edges);
       setSelectedNodeId(importedGraph.selectedNodeId);
@@ -557,23 +865,11 @@ export function App() {
       }
       nextNodeIndex.current = importedGraph.nextNodeIndex;
       setPendingRequestImport(null);
+      setHistoryNotice(historyLabel);
     } catch (err) {
       setRequestImportError(err instanceof Error ? err.message : "Failed to apply request import");
     }
-  }, [authSecrets, flowEdges, flowNodes, handleDeleteNode, pendingRequestImport, selectedNodeId, setError, setFlowEdges, setFlowNodes]);
-
-  const handleUndoRequestImport = useCallback(() => {
-    if (!importUndo) {
-      return;
-    }
-    setFlowNodes(importUndo.nodes);
-    setFlowEdges(importUndo.edges);
-    setSelectedNodeId(importUndo.selectedNodeId);
-    setAuthSecrets(importUndo.authSecrets);
-    nextNodeIndex.current = importUndo.nextNodeIndex;
-    setImportUndo(null);
-    setError("");
-  }, [importUndo, setError, setFlowEdges, setFlowNodes]);
+  }, [flowEdges, flowNodes, handleDeleteNode, pendingRequestImport, recordGraphChange, setError, setFlowEdges, setFlowNodes]);
 
   return (
     <div className="app-shell">
@@ -598,13 +894,27 @@ export function App() {
           onUpdateSecret={handleUpdateEnvironmentSecret}
         />
 
+        <ScenarioLibraryPanel
+          scenarios={savedScenarios}
+          activeScenarioId={activeScenarioId}
+          name={scenarioName}
+          tagsText={scenarioTagsText}
+          disabled={running || stopping}
+          onNameChange={handleScenarioNameChange}
+          onTagsChange={handleScenarioTagsChange}
+          onNew={handleNewScenario}
+          onSave={handleSaveScenario}
+          onLoad={handleLoadScenario}
+          onDelete={handleDeleteScenario}
+          onExport={handleExportScenario}
+          onImport={(file) => void handleImportScenario(file)}
+        />
+
         <section className="panel">
           <NodeInspector
             selectedNode={selectedNode}
             updateNode={updateSelectedNodeData}
             onOpenHelp={setHelpTopic}
-            savedScenarios={savedScenarios}
-            onLoadScenario={handleLoadScenario}
             authSecret={selectedNode ? authSecrets[selectedNode.id] ?? {} : {}}
             updateAuthSecret={updateAuthSecret}
           />
@@ -625,9 +935,29 @@ export function App() {
         <header className="toolbar">
           <div>
             <div className="eyebrow">Scenario</div>
-            <h2>HTTP target stress flow</h2>
+            <h2>{scenarioName || "Untitled scenario"}</h2>
           </div>
           <div className="toolbar-actions">
+            <button
+              type="button"
+              className="secondary icon-button"
+              aria-label="Undo graph change"
+              title={graphHistory.current.canUndo ? `Undo: ${graphHistory.current.undoLabel}` : "Nothing to undo"}
+              disabled={running || stopping || !graphHistory.current.canUndo}
+              onClick={handleUndo}
+            >
+              <Undo2 size={17} />
+            </button>
+            <button
+              type="button"
+              className="secondary icon-button"
+              aria-label="Redo graph change"
+              title={graphHistory.current.canRedo ? `Redo: ${graphHistory.current.redoLabel}` : "Nothing to redo"}
+              disabled={running || stopping || !graphHistory.current.canRedo}
+              onClick={handleRedo}
+            >
+              <Redo2 size={17} />
+            </button>
             <button
               type="button"
               className="secondary icon-button"
@@ -652,12 +982,29 @@ export function App() {
           onImportPostman={handleImportPostmanFile}
         />
 
-        {importUndo ? (
+        {historyNotice || deletedScenario ? (
           <div className="import-undo" role="status">
-            <span>{importUndo.message}</span>
+            <span>{historyNotice || `Deleted library entry: ${deletedScenario?.scenario.name}`}</span>
             <div>
-              <button type="button" className="secondary" onClick={handleUndoRequestImport}>Undo import</button>
-              <button type="button" className="secondary" onClick={() => setImportUndo(null)}>Dismiss</button>
+              {deletedScenario ? (
+                <button type="button" className="secondary" onClick={handleUndoScenarioDelete}>Undo delete</button>
+              ) : null}
+              {graphHistory.current.canUndo ? (
+                <button type="button" className="secondary" onClick={handleUndo}>Undo graph</button>
+              ) : null}
+              {graphHistory.current.canRedo ? (
+                <button type="button" className="secondary" onClick={handleRedo}>Redo graph</button>
+              ) : null}
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setHistoryNotice("");
+                  setDeletedScenario(null);
+                }}
+              >
+                Dismiss
+              </button>
             </div>
           </div>
         ) : null}
@@ -668,7 +1015,7 @@ export function App() {
           nodes={canvasNodes}
           edges={flowEdges}
           onNodesChange={handleNodeChanges}
-          onEdgesChange={onFlowEdgesChange}
+          onEdgesChange={handleEdgeChanges}
           onConnect={handleConnect}
           onPaneClick={handlePaneClick}
         />

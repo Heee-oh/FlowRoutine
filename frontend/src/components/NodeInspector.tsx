@@ -8,7 +8,7 @@ import {
   MIN_METRIC_BATCH_INTERVAL_MS,
 } from "../store";
 import type { HelpTopic } from "../help";
-import type { FlowNodeData, HeaderInputMode, HeaderRow, RuntimeAuthSecret, SavedScenario } from "../flowTypes";
+import type { FlowNodeData, HeaderInputMode, HeaderRow, RuntimeAuthSecret } from "../flowTypes";
 import {
   classifyTarget,
   commonHeaderNames,
@@ -17,7 +17,7 @@ import {
   numberValue,
   toNumber,
 } from "../flowModel";
-import { formatDuration, formatSavedAt } from "../format";
+import { formatDuration } from "../format";
 import { collectSecretPlaceholderNames } from "../secretSanitization";
 import {
   convertLoadProfileMode,
@@ -33,16 +33,12 @@ export const NodeInspector = memo(function NodeInspector({
   selectedNode,
   updateNode,
   onOpenHelp,
-  savedScenarios,
-  onLoadScenario,
   authSecret,
   updateAuthSecret,
 }: {
   selectedNode: Node<FlowNodeData> | null;
   updateNode: (patch: Partial<FlowNodeData>) => void;
   onOpenHelp: (topic: HelpTopic) => void;
-  savedScenarios: SavedScenario[];
-  onLoadScenario: (scenario: SavedScenario) => void;
   authSecret: RuntimeAuthSecret;
   updateAuthSecret: (nodeId: string, patch: Partial<RuntimeAuthSecret>) => void;
 }) {
@@ -83,40 +79,6 @@ export const NodeInspector = memo(function NodeInspector({
       <div className="inspector-note">
         Select a node to edit its settings. Start uses the Request, Engine, and Metrics nodes on the canvas.
       </div>
-      <SavedScenarioList scenarios={savedScenarios} onLoadScenario={onLoadScenario} />
-    </div>
-  );
-});
-
-const SavedScenarioList = memo(function SavedScenarioList({
-  scenarios,
-  onLoadScenario,
-}: {
-  scenarios: SavedScenario[];
-  onLoadScenario: (scenario: SavedScenario) => void;
-}) {
-  return (
-    <div className="saved-scenarios">
-      <div>
-        <div className="eyebrow">Saved</div>
-        <h2>Recent runs</h2>
-      </div>
-      {scenarios.length === 0 ? (
-        <div className="inspector-note">
-          Start a run to save the current graph here.
-        </div>
-      ) : (
-        <div className="saved-scenario-scroll">
-          <div className="saved-scenario-list">
-            {scenarios.map((scenario) => (
-              <button key={scenario.id} type="button" className="secondary saved-scenario-button" onClick={() => onLoadScenario(scenario)}>
-                <span>{scenario.name}</span>
-                <small>{formatSavedAt(scenario.savedAtUnixMs)}</small>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 });
