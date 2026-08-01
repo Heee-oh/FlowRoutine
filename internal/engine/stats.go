@@ -24,6 +24,7 @@ var latencyBucketUpperBoundsNano = buildLatencyBucketUpperBounds()
 
 type AtomicStats struct {
 	startedAtUnixNano atomic.Int64
+	droppedIterations atomic.Uint64
 	shards            []statsShard
 }
 
@@ -64,6 +65,7 @@ type Snapshot struct {
 	AssertionFailures uint64
 	CaptureFailures   uint64
 	TemplateFailures  uint64
+	DroppedIterations uint64
 	LatencySamples    uint64
 	TotalLatencyNano  uint64
 	MinLatencyNano    uint64
@@ -111,9 +113,14 @@ func (s *AtomicStats) Reset(startedAt time.Time) {
 		s.Init(1)
 	}
 	s.startedAtUnixNano.Store(startedAt.UnixNano())
+	s.droppedIterations.Store(0)
 	for i := range s.shards {
 		s.shards[i].reset()
 	}
+}
+
+func (s *AtomicStats) RecordDroppedIterations(count uint64) {
+	s.droppedIterations.Add(count)
 }
 
 func (s *AtomicStats) Shard(index int) *statsShard {
@@ -158,9 +165,10 @@ func (s *AtomicStats) RecordHTTPFailureSampled(latency time.Duration, bytesWritt
 
 func (s *AtomicStats) Snapshot(now time.Time) Snapshot {
 	snapshot := Snapshot{
-		StartedAt:      time.Unix(0, s.startedAtUnixNano.Load()),
-		At:             now,
-		MinLatencyNano: math.MaxUint64,
+		StartedAt:         time.Unix(0, s.startedAtUnixNano.Load()),
+		At:                now,
+		DroppedIterations: s.droppedIterations.Load(),
+		MinLatencyNano:    math.MaxUint64,
 	}
 
 	for i := range s.shards {

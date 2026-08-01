@@ -127,6 +127,25 @@ describe("buildRunReport", () => {
     ]));
   });
 
+  it("records the execution profile and dropped iterations", () => {
+    const request = createRequest();
+    request.config.profile = {
+      mode: "constant-arrival-rate",
+      startTarget: 100,
+      stages: [{ durationMs: 1_000, target: 100 }],
+      preAllocatedVUs: 1,
+      maxVUs: 2,
+      gracefulStopMs: 500,
+    };
+    const batch = completedBatch(10, 10);
+    batch.droppedIterations = 7;
+
+    const report = buildRunReport(request, reportMetrics([batch]));
+
+    expect(report.config.profile).toEqual(request.config.profile);
+    expect(report.summary.droppedIterations).toBe(7);
+  });
+
   it("redacts secrets from report URLs, headers, scenario metadata, and baseline keys", () => {
     const request = createRequest();
     request.config.url = "https://alice:password@example.com/items?access_token=report-url-secret";
@@ -153,7 +172,7 @@ describe("buildRunReport", () => {
     otherSecrets.config.url = "https://bob:other@example.com/items?access_token=different";
     otherSecrets.config.scenarioSteps[0].url = "https://example.com/items?X-Amz-Signature=different";
 
-    expect(report.schemaVersion).toBe(5);
+    expect(report.schemaVersion).toBe(6);
     expect(serialized).not.toMatch(/alice|password|report-(?:url|auth|step|api)-secret/);
     expect(report.run.targetUrl).toContain("REDACTED");
     expect(report.config.headers[0].value).toBe("[redacted]");

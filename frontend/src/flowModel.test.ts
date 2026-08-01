@@ -196,6 +196,37 @@ describe("scenario graph compilation", () => {
     ]);
     expect(request.config.scenarioSteps[2].url).toBe("https://second.example");
   });
+
+  it("builds and canonicalizes an arrival-rate profile before preflight", () => {
+    const nodes = initialFlowNodes.map((node) => node.data.kind === "engine"
+      ? {
+          ...node,
+          data: {
+            ...node.data,
+            rateLimitRps: 1_000,
+            loadProfile: {
+              mode: "ramping-arrival-rate" as const,
+              startTarget: 100,
+              stages: [
+                { durationMs: 1_000, target: 500 },
+                { durationMs: 2_000, target: 1_000 },
+              ],
+              preAllocatedVUs: 5,
+              maxVUs: 25,
+              gracefulStopMs: 1_500,
+            },
+          },
+        }
+      : node);
+
+    const request = buildStartRequestFromGraph(nodes, initialFlowEdges, createRequest(), {});
+
+    expect(request.config.profile?.mode).toBe("ramping-arrival-rate");
+    expect(request.config.virtualUsers).toBe(25);
+    expect(request.config.durationMs).toBe(3_000);
+    expect(request.config.rateLimitRps).toBe(0);
+    expect(request.config.rampUpMs).toBe(0);
+  });
 });
 
 describe("parseCaptureText", () => {

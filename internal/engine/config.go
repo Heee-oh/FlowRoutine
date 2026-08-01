@@ -39,6 +39,7 @@ type Config struct {
 	LatencySampleRate int
 	RateLimitRPS      int
 	RampUp            time.Duration
+	Profile           *LoadProfile
 	ScenarioSteps     []ScenarioStep
 }
 
@@ -86,8 +87,6 @@ type compiledConfig struct {
 	headers           []compiledHeader
 	body              []byte
 	requestBytes      int
-	virtualUsers      int
-	duration          time.Duration
 	requestTimeout    time.Duration
 	maxConnsPerHost   int
 	readBufferSize    int
@@ -95,7 +94,7 @@ type compiledConfig struct {
 	maxResponseBytes  int
 	latencySampleRate int
 	rateLimitRPS      int
-	rampUp            time.Duration
+	profile           compiledLoadProfile
 	steps             []compiledStep
 	clients           []compiledClient
 }
@@ -207,6 +206,10 @@ func compileConfig(cfg Config) (compiledConfig, error) {
 	if latencySampleRate == 0 {
 		latencySampleRate = DefaultLatencySampleRate
 	}
+	profile, err := compileLoadProfile(cfg, virtualUsers, requestTimeout)
+	if err != nil {
+		return compiledConfig{}, err
+	}
 
 	steps, clients, err := compileScenarioSteps(cfg, method)
 	if err != nil {
@@ -225,8 +228,6 @@ func compileConfig(cfg Config) (compiledConfig, error) {
 		headers:           firstRequest.headers,
 		body:              firstRequest.body,
 		requestBytes:      firstRequest.requestBytes,
-		virtualUsers:      virtualUsers,
-		duration:          cfg.Duration,
 		requestTimeout:    requestTimeout,
 		maxConnsPerHost:   maxConnsPerHost,
 		readBufferSize:    cfg.ReadBufferSize,
@@ -234,7 +235,7 @@ func compileConfig(cfg Config) (compiledConfig, error) {
 		maxResponseBytes:  cfg.MaxResponseBytes,
 		latencySampleRate: latencySampleRate,
 		rateLimitRPS:      cfg.RateLimitRPS,
-		rampUp:            cfg.RampUp,
+		profile:           profile,
 		steps:             steps,
 		clients:           clients,
 	}, nil

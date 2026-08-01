@@ -3,6 +3,7 @@ import { normalizeCaptureDefinition, normalizeCaptureScope } from "./captureVali
 import { DEFAULT_METRIC_BATCH_INTERVAL_MS, DEFAULT_METRIC_WINDOW_MS } from "./store";
 import { formatDuration } from "./format";
 import { compileScenarioGraph, type CompiledScenarioGraph } from "./graphCompiler";
+import { isArrivalMode, legacyLoadProfile, loadProfileSummary } from "./loadProfile";
 import {
   resolveSecretPlaceholders,
   sanitizeHeaderRows,
@@ -127,6 +128,13 @@ export function buildStartRequestFromGraph(
     .filter(isRunnableScenarioNode)
     .map((node) => nodeToScenarioStep(node, authSecrets))
     .filter((step): step is ScenarioStep => Boolean(step));
+  const loadProfile = engineNode.data.loadProfile ?? legacyLoadProfile({
+    virtualUsers: numberValue(engineNode.data.virtualUsers, fallback.config.virtualUsers),
+    durationMs: numberValue(engineNode.data.durationMs, fallback.config.durationMs),
+    rampUpMs: numberValue(engineNode.data.rampUpMs, fallback.config.rampUpMs),
+    requestTimeoutMs: numberValue(engineNode.data.requestTimeoutMs, fallback.config.requestTimeoutMs),
+  });
+  const profileSummary = loadProfileSummary(loadProfile);
 
   return {
     config: {
@@ -147,15 +155,18 @@ export function buildStartRequestFromGraph(
         stringValue(requestNode.data.body, fallback.config.body),
         authSecrets,
       ),
-      virtualUsers: numberValue(engineNode.data.virtualUsers, fallback.config.virtualUsers),
-      durationMs: numberValue(engineNode.data.durationMs, fallback.config.durationMs),
+      virtualUsers: profileSummary.maxVirtualUsers,
+      durationMs: profileSummary.durationMs,
       requestTimeoutMs: numberValue(engineNode.data.requestTimeoutMs, fallback.config.requestTimeoutMs),
       maxConnsPerHost: numberValue(engineNode.data.maxConnsPerHost, fallback.config.maxConnsPerHost),
       readBufferSize: numberValue(engineNode.data.readBufferSize, fallback.config.readBufferSize),
       writeBufferSize: numberValue(engineNode.data.writeBufferSize, fallback.config.writeBufferSize),
       maxResponseBytes: numberValue(engineNode.data.maxResponseBytes, fallback.config.maxResponseBytes),
-      rateLimitRps: numberValue(engineNode.data.rateLimitRps, fallback.config.rateLimitRps),
-      rampUpMs: numberValue(engineNode.data.rampUpMs, fallback.config.rampUpMs),
+      rateLimitRps: isArrivalMode(profileSummary.profile.mode)
+        ? 0
+        : numberValue(engineNode.data.rateLimitRps, fallback.config.rateLimitRps),
+      rampUpMs: 0,
+      profile: profileSummary.profile,
       latencySampleRate: numberValue(metricsNode?.data.latencySampleRate, fallback.config.latencySampleRate),
       scenarioSteps,
     },
@@ -172,8 +183,19 @@ export function refreshNodeDisplay(node: Node<FlowNodeData>): Node<FlowNodeData>
       data.caption = getHost(stringValue(data.url, ""));
       break;
     case "engine":
-      data.value = `${numberValue(data.virtualUsers, 1)} VUs`;
-      data.caption = `${numberValue(data.rateLimitRps, 0) || "unlimited"} RPS cap`;
+      if (data.loadProfile) {
+        try {
+          const summary = loadProfileSummary(data.loadProfile);
+          data.value = `${summary.peakTarget} ${summary.targetUnit}`;
+          data.caption = `${summary.profile.stages.length} stage${summary.profile.stages.length === 1 ? "" : "s"} · ${formatDuration(summary.durationMs)}`;
+        } catch {
+          data.value = "Invalid profile";
+          data.caption = "Fix load profile settings";
+        }
+      } else {
+        data.value = `${numberValue(data.virtualUsers, 1)} VUs`;
+        data.caption = `${numberValue(data.rateLimitRps, 0) || "unlimited"} RPS cap`;
+      }
       break;
     case "assertion":
       data.value = stringValue(data.expectedStatus, "2xx");
@@ -381,7 +403,13 @@ function nodeTemplate(kind: FlowNodeKind, settings: Partial<FlowNodeData> | null
         body: settings?.body ?? "",
         capturesText: settings?.capturesText ?? "",
       };
-    case "engine":
+    case "engine": {
+      const legacyProfile = legacyLoadProfile({
+        virtualUsers: numberValue(settings?.virtualUsers, 128),
+        durationMs: numberValue(settings?.durationMs, 10_000),
+        rampUpMs: numberValue(settings?.rampUpMs, 1_000),
+        requestTimeoutMs: numberValue(settings?.requestTimeoutMs, 1_000),
+      });
       return {
         label: "Engine",
         value: `${settings?.virtualUsers ?? 128} VUs`,
@@ -396,7 +424,9 @@ function nodeTemplate(kind: FlowNodeKind, settings: Partial<FlowNodeData> | null
         maxResponseBytes: settings?.maxResponseBytes ?? 1_048_576,
         rateLimitRps: settings?.rateLimitRps ?? 1_000,
         rampUpMs: settings?.rampUpMs ?? 1_000,
+        loadProfile: settings?.loadProfile ?? legacyProfile,
       };
+    }
     case "assertion":
       return {
         label: "Assert",

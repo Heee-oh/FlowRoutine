@@ -106,7 +106,7 @@ func New(cfg Config) (*Engine, error) {
 	engine.respPool.New = func() any {
 		return &fasthttp.Response{}
 	}
-	engine.stats.Init(compiled.virtualUsers)
+	engine.stats.Init(compiled.profile.maxWorkers)
 
 	return engine, nil
 }
@@ -119,18 +119,12 @@ func (e *Engine) Start(parent context.Context) error {
 		return ErrAlreadyRunning
 	}
 
-	var ctx context.Context
-	var cancel context.CancelFunc
-	if e.cfg.duration > 0 {
-		ctx, cancel = context.WithTimeout(parent, e.cfg.duration)
-	} else {
-		ctx, cancel = context.WithCancel(parent)
-	}
+	ctx, cancel := context.WithCancel(parent)
 
 	e.cancel = cancel
 	e.done = make(chan struct{})
 	e.stats.Reset(time.Now())
-	goroutines := e.cfg.virtualUsers
+	goroutines := 1
 	if e.limiter != nil {
 		e.limiter.Reset()
 		goroutines++
@@ -142,9 +136,7 @@ func (e *Engine) Start(parent context.Context) error {
 			e.limiter.Run(ctx)
 		}()
 	}
-	for i := 0; i < e.cfg.virtualUsers; i++ {
-		go e.worker(ctx, i)
-	}
+	go e.runLoadProfile(ctx, cancel)
 
 	go func() {
 		e.wg.Wait()
@@ -176,30 +168,36 @@ func (e *Engine) Snapshot() Snapshot {
 	return e.stats.Snapshot(time.Now())
 }
 
-func (e *Engine) worker(ctx context.Context, index int) {
-	defer e.wg.Done()
+type workerRuntime struct {
+	stats           *statsShard
+	sampleCountdown int
+	variables       *workerVariables
+}
 
-	if !e.waitForRampUp(ctx, index) {
-		return
+func (e *Engine) newWorkerRuntime(index int) workerRuntime {
+	return workerRuntime{
+		stats:           e.stats.Shard(index),
+		sampleCountdown: e.cfg.latencySampleRate,
+		variables:       newWorkerVariables(),
 	}
+}
 
-	stats := e.stats.Shard(index)
-	sampleCountdown := e.cfg.latencySampleRate
-	variables := newWorkerVariables()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		variables.beginIteration()
-		var lastStatus int
-		for i := range e.cfg.steps {
-			if !e.runStep(ctx, stats, &sampleCountdown, &lastStatus, &e.cfg.steps[i], variables) {
-				return
-			}
+func (e *Engine) runIteration(ctx context.Context, runtime *workerRuntime) bool {
+	runtime.variables.beginIteration()
+	var lastStatus int
+	for i := range e.cfg.steps {
+		if !e.runStep(
+			ctx,
+			runtime.stats,
+			&runtime.sampleCountdown,
+			&lastStatus,
+			&e.cfg.steps[i],
+			runtime.variables,
+		) {
+			return false
 		}
 	}
+	return true
 }
 
 func newHostClient(cfg compiledConfig, client compiledClient) *fasthttp.HostClient {
@@ -317,24 +315,6 @@ func matchStatus(status int, expected string) bool {
 		code = code*10 + int(ch-'0')
 	}
 	return status == code
-}
-
-func (e *Engine) waitForRampUp(ctx context.Context, index int) bool {
-	if e.cfg.rampUp <= 0 || index == 0 {
-		return true
-	}
-	delay := time.Duration(int64(e.cfg.rampUp) * int64(index) / int64(e.cfg.virtualUsers))
-	if delay <= 0 {
-		return true
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
 }
 
 func (e *Engine) acquireRequest(step compiledRequestStep, variables *workerVariables) (*fasthttp.Request, error) {

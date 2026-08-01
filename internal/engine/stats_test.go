@@ -38,6 +38,7 @@ func TestAtomicStatsUsesBoundedSharedShardsWithoutLosingCounters(t *testing.T) {
 	var stats AtomicStats
 	stats.Init(virtualUsers)
 	stats.Reset(time.Unix(1, 0))
+	stats.RecordDroppedIterations(7)
 
 	if len(stats.shards) > maxStatsShards {
 		t.Fatalf("allocated %d stats shards, maximum is %d", len(stats.shards), maxStatsShards)
@@ -110,6 +111,13 @@ func TestAtomicStatsUsesBoundedSharedShardsWithoutLosingCounters(t *testing.T) {
 			snapshot.MaxLatencyNano,
 			uint64(workers)*uint64(time.Microsecond),
 		)
+	}
+	if snapshot.DroppedIterations != 7 {
+		t.Fatalf("got %d dropped iterations, want 7", snapshot.DroppedIterations)
+	}
+	stats.Reset(time.Unix(3, 0))
+	if reset := stats.Snapshot(time.Unix(4, 0)); reset.DroppedIterations != 0 {
+		t.Fatalf("dropped iterations were not reset: %d", reset.DroppedIterations)
 	}
 }
 

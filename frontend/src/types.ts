@@ -3,6 +3,26 @@ export type Header = {
   value: string;
 };
 
+export type LoadMode =
+  | "constant-vus"
+  | "ramping-vus"
+  | "constant-arrival-rate"
+  | "ramping-arrival-rate";
+
+export type LoadStage = {
+  durationMs: number;
+  target: number;
+};
+
+export type LoadProfile = {
+  mode: LoadMode;
+  startTarget: number;
+  stages: LoadStage[];
+  preAllocatedVUs: number;
+  maxVUs: number;
+  gracefulStopMs: number;
+};
+
 export type LoadConfig = {
   url: string;
   method: string;
@@ -18,6 +38,7 @@ export type LoadConfig = {
   latencySampleRate: number;
   rateLimitRps: number;
   rampUpMs: number;
+  profile?: LoadProfile;
   scenarioSteps: ScenarioStep[];
 };
 
@@ -69,6 +90,7 @@ export type EffectiveLoadConfig = Pick<
   | "latencySampleRate"
   | "rateLimitRps"
   | "rampUpMs"
+  | "profile"
 >;
 
 export type PreflightEstimate = {
@@ -105,6 +127,7 @@ export type MetricsBatch = {
   assertionsFailed: number;
   captureFailures: number;
   templateFailures: number;
+  droppedIterations?: number;
   latencyPercentileErrorBoundPct: number;
   intervalLatency: IntervalLatencyMetrics;
   runLatency: CumulativeLatencyMetrics;
@@ -212,4 +235,5 @@ export type FlowSettings = {
   latencySampleRate: number;
   rateLimitRps: number;
   rampUpMs: number;
+  profile?: LoadProfile;
 };

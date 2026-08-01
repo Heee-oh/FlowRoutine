@@ -63,6 +63,122 @@ func TestPreflightAllowsSlowMetricBatches(t *testing.T) {
 	}
 }
 
+func TestPreflightNormalizesStagedVUProfile(t *testing.T) {
+	request := validPreflightRequest()
+	request.Config.MaxConnsPerHost = 100
+	request.Config.Profile = &LoadProfile{
+		Mode:        string("ramping-vus"),
+		StartTarget: 0,
+		Stages: []LoadStage{
+			{DurationMS: 1_000, Target: 10},
+			{DurationMS: 2_000, Target: 50},
+			{DurationMS: 1_000, Target: 0},
+		},
+		GracefulStopMS: 500,
+	}
+
+	preflight, err := preflightStartRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflight.EffectiveConfig.VirtualUsers != 50 || preflight.EffectiveConfig.DurationMS != 4_000 {
+		t.Fatalf("unexpected effective profile: %+v", preflight.EffectiveConfig)
+	}
+	if preflight.EffectiveConfig.RampUpMS != 0 || preflight.EffectiveConfig.Profile == nil {
+		t.Fatalf("profile was not normalized: %+v", preflight.EffectiveConfig)
+	}
+	if preflight.Estimate.Connections != 50 {
+		t.Fatalf("connection estimate = %d, want 50", preflight.Estimate.Connections)
+	}
+}
+
+func TestPreflightNormalizesArrivalProfileWorkerCapacity(t *testing.T) {
+	request := validPreflightRequest()
+	request.Config.MaxConnsPerHost = 100
+	request.Config.RateLimitRPS = 0
+	request.Config.Profile = &LoadProfile{
+		Mode:            "constant-arrival-rate",
+		StartTarget:     500,
+		Stages:          []LoadStage{{DurationMS: 2_000, Target: 500}},
+		PreAllocatedVUs: 4,
+		MaxVUs:          20,
+	}
+
+	preflight, err := preflightStartRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflight.EffectiveConfig.VirtualUsers != 20 || preflight.Estimate.Connections != 20 {
+		t.Fatalf("arrival capacity was not used for estimates: %+v", preflight)
+	}
+	if got := preflight.EffectiveConfig.Profile.GracefulStopMS; got != request.Config.RequestTimeoutMS {
+		t.Fatalf("default graceful stop = %d, want %d", got, request.Config.RequestTimeoutMS)
+	}
+	engineConfig := preflight.normalizedConfig.toEngineConfig()
+	if engineConfig.Profile == nil || engineConfig.Profile.MaxVUs != 20 || engineConfig.Profile.Stages[0].Duration != 2*time.Second {
+		t.Fatalf("unexpected engine profile mapping: %+v", engineConfig.Profile)
+	}
+}
+
+func TestPreflightRejectsInvalidLoadProfiles(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile LoadProfile
+		rateCap int
+		message string
+	}{
+		{
+			name:    "missing stages",
+			profile: LoadProfile{Mode: "ramping-vus", StartTarget: 1},
+			message: "between 1 and",
+		},
+		{
+			name: "stage target",
+			profile: LoadProfile{
+				Mode:        "ramping-vus",
+				StartTarget: 1,
+				Stages:      []LoadStage{{DurationMS: 1_000, Target: MaxVirtualUsers + 1}},
+			},
+			message: "target must be between",
+		},
+		{
+			name: "arrival capacity",
+			profile: LoadProfile{
+				Mode:            "constant-arrival-rate",
+				StartTarget:     10,
+				Stages:          []LoadStage{{DurationMS: 1_000, Target: 10}},
+				PreAllocatedVUs: 2,
+				MaxVUs:          1,
+			},
+			message: "max virtual users",
+		},
+		{
+			name: "double throttle",
+			profile: LoadProfile{
+				Mode:            "constant-arrival-rate",
+				StartTarget:     10,
+				Stages:          []LoadStage{{DurationMS: 1_000, Target: 10}},
+				PreAllocatedVUs: 1,
+				MaxVUs:          1,
+			},
+			rateCap: 10,
+			message: "cannot be combined",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := validPreflightRequest()
+			request.Config.Profile = &test.profile
+			request.Config.RateLimitRPS = test.rateCap
+			_, err := preflightStartRequest(request)
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("got %v, want error containing %q", err, test.message)
+			}
+		})
+	}
+}
+
 func TestPreflightReturnsActionablePressureWarnings(t *testing.T) {
 	request := validPreflightRequest()
 	request.Config.VirtualUsers = WarningConnections

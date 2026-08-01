@@ -6,7 +6,7 @@ export type HelpItem = { title: string; description: Record<HelpLanguage, string
 
 export const overviewHelpItems: HelpItem[] = [
   helpItem("Request", "Target URL, method, headers, and body for HTTP traffic.", "부하 테스트에서 보낼 HTTP 요청의 URL, method, headers, body입니다."),
-  helpItem("Engine", "Virtual users, duration, timeout, connection cap, RPS cap, and ramp-up.", "VUs, duration, timeout, max conns, RPS limit, ramp-up을 제어합니다."),
+  helpItem("Engine", "Staged VU or arrival-rate profiles, timeout, connection cap, and request RPS cap.", "단계형 VU 또는 arrival-rate profile, timeout, max conns, request RPS limit을 제어합니다."),
   helpItem("Assert", "Expected response status check for scenario requests.", "요청 응답 status code가 expected status와 맞는지 확인합니다."),
   helpItem("Delay", "Wait time inserted when the node is on the Request through Engine path.", "Request에서 Engine으로 이어지는 실행 경로에 있을 때 요청 사이에 delay를 넣습니다."),
   helpItem("Metrics", "Batch interval and latency sampling for live measurements.", "실시간 metrics 전송 주기와 latency sampling 빈도를 설정합니다."),
@@ -25,12 +25,13 @@ export const nodeHelpItems: Record<FlowNodeKind, HelpItem[]> = {
     helpItem("Capture JSON", "Use name[@iteration|run][:success|any|2xx|200]=JSON.path. Iteration values reset each loop; run values keep the first successful value per virtual user. Missing templates are never sent.", "name[@iteration|run][:success|any|2xx|200]=JSON.path 형식입니다. iteration 값은 loop마다 초기화되고 run 값은 virtual user별 첫 성공값을 유지합니다. 누락된 template은 전송하지 않습니다."),
   ],
   engine: [
-    helpItem("VUs", "Number of virtual users running the scenario loop concurrently.", "Scenario loop를 동시에 실행하는 virtual users 수입니다."),
-    helpItem("Duration ms", "Total run time in milliseconds before the test stops automatically.", "Test가 자동으로 멈추기 전까지의 전체 run time입니다. 단위는 milliseconds입니다."),
+    helpItem("Execution mode", "Choose constant or staged VUs, or constant or staged iteration arrival rate.", "고정/단계형 VU 또는 고정/단계형 iteration arrival rate를 선택합니다."),
+    helpItem("Stages", "Each stage linearly changes the target over its duration. The preview shows the complete profile before start.", "각 stage는 duration 동안 target을 선형으로 바꿉니다. 시작 전 preview에서 전체 profile을 확인할 수 있습니다."),
+    helpItem("Arrival capacity", "Pre-allocated VUs are ready at start; Max VUs is the hard worker ceiling. Iterations beyond it are reported as dropped.", "Pre-allocated VUs는 시작 시 준비되며 Max VUs는 worker 상한입니다. 이를 넘는 iterations는 dropped로 집계됩니다."),
+    helpItem("Graceful stop", "Stops new iterations and gives active iterations this long to finish before context-aware work is cancelled. An in-flight request can continue until its request timeout.", "새 iteration 시작을 중단하고 실행 중 iteration이 끝날 때까지 기다리는 유예 시간입니다. 이미 전송 중인 request는 request timeout까지 계속될 수 있습니다."),
     helpItem("Timeout ms", "Maximum time allowed for one request before it is counted as failed.", "Request 하나가 failed로 처리되기 전까지 기다리는 최대 시간입니다."),
     helpItem("Max conns", "Maximum keep-alive connections per target host. Lower values intentionally limit concurrency.", "Target host별 keep-alive 최대 connections 수입니다. 낮게 설정하면 의도적으로 concurrency를 제한합니다."),
-    helpItem("Rate limit RPS", "Global requests-per-second cap. Use 0 for unlimited.", "전체 requests per second 제한입니다. 0은 unlimited입니다."),
-    helpItem("Ramp-up ms", "Time window used to gradually start virtual users.", "Virtual users를 한 번에 시작하지 않고 점진적으로 시작하는 time window입니다."),
+    helpItem("Request rate cap", "Optional global request cap for VU profiles. Arrival-rate profiles control iteration starts and disable this cap.", "VU profile의 선택적 전체 request 제한입니다. Arrival-rate profile은 iteration 시작률을 제어하므로 이 제한을 비활성화합니다."),
   ],
   assertion: [
     helpItem("Expected status", "Status code rule checked after a request, such as 200 or 2xx.", "Request 후 확인할 status code 규칙입니다. 예: 200, 2xx"),

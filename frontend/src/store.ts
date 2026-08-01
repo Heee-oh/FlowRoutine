@@ -8,6 +8,7 @@ import {
   type MetricHistoryPoint,
 } from "./metricHistory";
 import type { FlowSettings, Header, MetricsBatch, StartRequest } from "./types";
+import { legacyLoadProfile } from "./loadProfile";
 
 export const DEFAULT_METRIC_WINDOW_MS = 60_000;
 export const DEFAULT_METRIC_BATCH_INTERVAL_MS = 150;
@@ -30,6 +31,12 @@ const defaultSettings: FlowSettings = {
   latencySampleRate: 1,
   rateLimitRps: 1_000,
   rampUpMs: 1_000,
+  profile: legacyLoadProfile({
+    virtualUsers: 128,
+    durationMs: 10_000,
+    rampUpMs: 1_000,
+    requestTimeoutMs: 1_000,
+  }),
 };
 
 type LoadState = {
@@ -92,6 +99,7 @@ export const useLoadStore = create<LoadState>((set, get) => ({
         latencySampleRate: settings.latencySampleRate,
         rateLimitRps: settings.rateLimitRps,
         rampUpMs: settings.rampUpMs,
+        profile: settings.profile,
         scenarioSteps: [],
       },
       batchIntervalMs: settings.batchIntervalMs,
