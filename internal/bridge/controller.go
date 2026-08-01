@@ -39,8 +39,10 @@ type ScenarioStep struct {
 }
 
 type Capture struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Scope    string `json:"scope"`
+	OnStatus string `json:"onStatus"`
 }
 
 type LoadConfig struct {
@@ -73,6 +75,8 @@ type SnapshotResponse struct {
 	ConnRefused       uint64            `json:"connRefused"`
 	OtherFailures     uint64            `json:"otherFailures"`
 	AssertionFailures uint64            `json:"assertionFailures"`
+	CaptureFailures   uint64            `json:"captureFailures"`
+	TemplateFailures  uint64            `json:"templateFailures"`
 	LatencySamples    uint64            `json:"latencySamples"`
 	TotalLatencyNano  uint64            `json:"totalLatencyNano"`
 	MinLatencyNano    uint64            `json:"minLatencyNano"`
@@ -294,7 +298,12 @@ func (c LoadConfig) toEngineConfig() engine.Config {
 		}
 		captures := make([]engine.VariableCapture, 0, len(step.Captures))
 		for _, capture := range step.Captures {
-			captures = append(captures, engine.VariableCapture{Name: capture.Name, Path: capture.Path})
+			captures = append(captures, engine.VariableCapture{
+				Name:     capture.Name,
+				Path:     capture.Path,
+				Scope:    engine.VariableScope(capture.Scope),
+				OnStatus: capture.OnStatus,
+			})
 		}
 		steps = append(steps, engine.ScenarioStep{
 			Kind:           engine.StepKind(step.Kind),
@@ -340,6 +349,8 @@ func snapshotResponse(snapshot engine.Snapshot) SnapshotResponse {
 		ConnRefused:       snapshot.ConnRefused,
 		OtherFailures:     snapshot.OtherFailures,
 		AssertionFailures: snapshot.AssertionFailures,
+		CaptureFailures:   snapshot.CaptureFailures,
+		TemplateFailures:  snapshot.TemplateFailures,
 		LatencySamples:    snapshot.LatencySamples,
 		TotalLatencyNano:  snapshot.TotalLatencyNano,
 		MinLatencyNano:    snapshot.MinLatencyNano,

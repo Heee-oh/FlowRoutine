@@ -1,3 +1,4 @@
+import { normalizeCaptureDefinition } from "./captureValidation";
 import type { Header, QualityGate, ScenarioStep, StartRequest } from "./types";
 import {
   sanitizeHeaderRows,
@@ -17,6 +18,7 @@ export function downloadK6Script(request: StartRequest) {
 
 export function buildK6Script(request: StartRequest) {
   const steps = scenarioSteps(request);
+  validateTemplateOrder(steps);
   const lines = [
     "import http from \"k6/http\";",
     "import { check, sleep } from \"k6\";",
@@ -30,16 +32,51 @@ export function buildK6Script(request: StartRequest) {
   ];
 
   lines.push(
-    "const vars = {};",
-    "const render = (value) => value.replace(/\\{\\{([^}]+)\\}\\}/g, (_match, name) => vars[name] ?? __ENV[name] ?? \"\");",
-    "const capture = (name, path, response) => {",
-    "  const value = path.split(\".\").reduce((current, segment) => current == null ? undefined : current[segment], response.json());",
-    "  if (value !== undefined && value !== null) vars[name] = String(value);",
+    "const runVars = {};",
+    "const owns = (value, name) => Object.prototype.hasOwnProperty.call(value, name);",
+    "const resolve = (name, iterationVars) => {",
+    "  if (owns(iterationVars, name)) return iterationVars[name];",
+    "  if (owns(runVars, name)) return runVars[name];",
+    "  if (name.startsWith(\"SECRET_\") && owns(__ENV, name)) return __ENV[name];",
+    "  throw new Error(`Template variable ${name} is unavailable for this iteration`);",
+    "};",
+    "const render = (value, iterationVars) => value.replace(/\\{\\{([^}]+)\\}\\}/g, (_match, name) => resolve(name.trim(), iterationVars));",
+    "const matchesStatus = (status, policy) => policy === \"any\" ||",
+    "  (policy === \"success\" && status >= 200 && status < 400) ||",
+    "  (/^[1-5]xx$/.test(policy) && Math.floor(status / 100) === Number(policy[0])) ||",
+    "  (/^[1-5][0-9]{2}$/.test(policy) && status === Number(policy));",
+    "const pathSegments = (path) => path === \"$\" ? [] : path.replace(/^\\$\\.?/, \"\").replace(/\\[(\\d+)\\]/g, (_match, index) => `.${String(Number(index))}`).split(\".\").filter(Boolean);",
+    "const captureAll = (captures, response, iterationVars) => {",
+    "  const eligible = captures.filter(({ name, scope, onStatus }) => {",
+    "    if (scope === \"run\" && owns(runVars, name)) return false;",
+    "    if (matchesStatus(response.status, onStatus)) return true;",
+    "    if (scope === \"iteration\") delete iterationVars[name];",
+    "    return false;",
+    "  });",
+    "  if (eligible.length === 0) return true;",
+    "  try {",
+    "    const document = response.json();",
+    "    const values = eligible.map(({ path }) => pathSegments(path).reduce((current, segment) => {",
+    "      if (current == null) return undefined;",
+    "      const key = Array.isArray(current) && /^\\d+$/.test(segment) ? Number(segment) : segment;",
+    "      return current[key];",
+    "    }, document));",
+    "    if (values.some((value) => value === undefined)) throw new Error(\"capture path not found\");",
+    "    eligible.forEach(({ name, scope }, index) => {",
+    "      const value = values[index];",
+    "      const rendered = typeof value === \"string\" ? value : value == null ? \"\" : typeof value === \"object\" ? JSON.stringify(value) : String(value);",
+    "      (scope === \"run\" ? runVars : iterationVars)[name] = rendered;",
+    "    });",
+    "    return true;",
+    "  } catch (_error) {",
+    "    eligible.forEach(({ name, scope }) => { if (scope === \"iteration\") delete iterationVars[name]; });",
+    "    return false;",
+    "  }",
     "};",
     "",
   );
 
-  lines.push("export default function () {", "  let res;");
+  lines.push("export default function () {", "  const iterationVars = {};", "  let res;");
   for (const step of steps) {
     lines.push(...renderStep(step));
   }
@@ -117,14 +154,20 @@ function renderStep(step: ScenarioStep) {
 
 function renderRequestStep(step: ScenarioStep) {
   const method = step.method || "GET";
-  const body = step.body ? `render(${JSON.stringify(step.body)})` : "null";
+  const body = step.body ? `render(${JSON.stringify(step.body)}, iterationVars)` : "null";
   const lines = [
-    `  res = http.request(${JSON.stringify(method)}, render(${JSON.stringify(step.url || "")}), ${body}, {`,
+    `  res = http.request(${JSON.stringify(method)}, render(${JSON.stringify(step.url || "")}, iterationVars), ${body}, {`,
     `    headers: ${renderHeaders(step.headers ?? [], "    ")},`,
     "  });",
   ];
-  for (const capture of step.captures ?? []) {
-    lines.push(`  capture(${JSON.stringify(capture.name)}, ${JSON.stringify(capture.path)}, res);`);
+  const captures = (step.captures ?? []).map(normalizeCaptureDefinition);
+  if (captures.length > 0) {
+    const label = `captures: ${captures.map((capture) => capture.name).join(", ")}`;
+    lines.push(
+      "  check(res, {",
+      `    ${JSON.stringify(label)}: (response) => captureAll(${JSON.stringify(captures)}, response, iterationVars),`,
+      "  });",
+    );
   }
   return lines;
 }
@@ -135,9 +178,90 @@ function renderHeaders(headers: Header[], baseIndent: string) {
     return "{}";
   }
   const entries = activeHeaders.map((header) => {
-    return `${baseIndent}  ${JSON.stringify(header.name)}: render(${JSON.stringify(header.value)}),`;
+    return `${baseIndent}  ${JSON.stringify(header.name)}: render(${JSON.stringify(header.value)}, iterationVars),`;
   });
   return `{\n${entries.join("\n")}\n${baseIndent}}`;
+}
+
+function validateTemplateOrder(steps: ScenarioStep[]) {
+  const available = new Map<string, "iteration" | "run">();
+  for (const [index, step] of steps.entries()) {
+    if (step.kind !== "request") {
+      continue;
+    }
+    if (templateNames(step.method ?? "").length > 0) {
+      throw new Error(`Scenario step ${index + 1} method cannot contain templates`);
+    }
+    if (templateNames(urlAuthority(step.url ?? "")).length > 0) {
+      throw new Error(`Scenario step ${index + 1} host cannot contain templates`);
+    }
+    for (const header of step.headers ?? []) {
+      if (templateNames(header.name).length > 0) {
+        throw new Error(`Scenario step ${index + 1} header names cannot contain templates`);
+      }
+    }
+    for (const value of [
+      step.url ?? "",
+      step.body ?? "",
+      ...(step.headers ?? []).map((header) => header.value),
+    ]) {
+      for (const name of templateNames(value)) {
+        if (!name.startsWith("SECRET_") && !available.has(name)) {
+          throw new Error(`Scenario step ${index + 1} template variable ${name} is not defined by an earlier capture`);
+        }
+      }
+    }
+    const stepNames = new Set<string>();
+    for (const rawCapture of step.captures ?? []) {
+      const capture = normalizeCaptureDefinition(rawCapture);
+      if (stepNames.has(capture.name)) {
+        throw new Error(`Capture name ${capture.name} is duplicated in scenario step ${index + 1}`);
+      }
+      stepNames.add(capture.name);
+      const scope = capture.scope;
+      const existingScope = available.get(capture.name);
+      if (existingScope && existingScope !== scope) {
+        throw new Error(`Capture ${capture.name} changes scope from ${existingScope} to ${scope}`);
+      }
+      available.set(capture.name, scope);
+    }
+  }
+}
+
+function urlAuthority(rawURL: string) {
+  return rawURL.match(/^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i)?.[1] ?? "";
+}
+
+function templateNames(value: string) {
+  const names: string[] = [];
+  let offset = 0;
+  while (offset < value.length) {
+    const start = value.indexOf("{{", offset);
+    const unexpectedClose = value.indexOf("}}", offset);
+    if (start < 0) {
+      if (unexpectedClose >= 0) {
+        throw new Error("Template contains an unexpected closing delimiter");
+      }
+      break;
+    }
+    if (unexpectedClose >= 0 && unexpectedClose < start) {
+      throw new Error("Template contains an unexpected closing delimiter");
+    }
+    const end = value.indexOf("}}", start + 2);
+    if (end < 0) {
+      throw new Error("Template contains an unclosed variable");
+    }
+    const name = value.slice(start + 2, end).trim();
+    if (!name) {
+      throw new Error("Template variable name is required");
+    }
+    if (!/^[a-z_][a-z0-9_.-]*$/i.test(name)) {
+      throw new Error(`Invalid template variable name: ${name}`);
+    }
+    names.push(name);
+    offset = end + 2;
+  }
+  return names;
 }
 
 function renderStatusCheck(expectedStatus: string) {

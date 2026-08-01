@@ -35,6 +35,51 @@ type Engine struct {
 	wg      sync.WaitGroup
 }
 
+type workerVariables struct {
+	iteration map[string]string
+	run       map[string]string
+}
+
+func newWorkerVariables() *workerVariables {
+	return &workerVariables{
+		iteration: make(map[string]string),
+		run:       make(map[string]string),
+	}
+}
+
+func (variables *workerVariables) beginIteration() {
+	clear(variables.iteration)
+}
+
+func (variables *workerVariables) value(name string) (string, bool) {
+	if value, ok := variables.iteration[name]; ok {
+		return value, true
+	}
+	value, ok := variables.run[name]
+	return value, ok
+}
+
+func (variables *workerVariables) runValueExists(name string) bool {
+	_, ok := variables.run[name]
+	return ok
+}
+
+func (variables *workerVariables) set(capture compiledVariableCapture, value string) {
+	if capture.scope == VariableScopeRun {
+		if !variables.runValueExists(capture.name) {
+			variables.run[capture.name] = value
+		}
+		return
+	}
+	variables.iteration[capture.name] = value
+}
+
+func (variables *workerVariables) invalidate(capture compiledVariableCapture) {
+	if capture.scope == VariableScopeIteration {
+		delete(variables.iteration, capture.name)
+	}
+}
+
 func New(cfg Config) (*Engine, error) {
 	compiled, err := compileConfig(cfg)
 	if err != nil {
@@ -129,13 +174,14 @@ func (e *Engine) worker(ctx context.Context, index int) {
 
 	stats := e.stats.Shard(index)
 	sampleCountdown := e.cfg.latencySampleRate
-	variables := make(map[string]string)
+	variables := newWorkerVariables()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
+		variables.beginIteration()
 		var lastStatus int
 		for i := range e.cfg.steps {
 			if !e.runStep(ctx, stats, &sampleCountdown, &lastStatus, &e.cfg.steps[i], variables) {
@@ -159,7 +205,7 @@ func newHostClient(cfg compiledConfig, client compiledClient) *fasthttp.HostClie
 	}
 }
 
-func (e *Engine) runStep(ctx context.Context, stats *statsShard, sampleCountdown *int, lastStatus *int, step *compiledStep, variables map[string]string) bool {
+func (e *Engine) runStep(ctx context.Context, stats *statsShard, sampleCountdown *int, lastStatus *int, step *compiledStep, variables *workerVariables) bool {
 	switch step.kind {
 	case compiledDelay:
 		return sleepContext(ctx, step.delay)
@@ -175,12 +221,18 @@ func (e *Engine) runStep(ctx context.Context, stats *statsShard, sampleCountdown
 	}
 }
 
-func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCountdown *int, lastStatus *int, step compiledRequestStep, variables map[string]string) bool {
+func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCountdown *int, lastStatus *int, step compiledRequestStep, variables *workerVariables) bool {
 	if e.limiter != nil && !e.limiter.Wait(ctx) {
 		return false
 	}
 
-	req := e.acquireRequest(step, variables)
+	req, err := e.acquireRequest(step, variables)
+	if err != nil {
+		*lastStatus = 0
+		invalidateCaptures(step.captures, variables)
+		stats.RecordTemplateFailure()
+		return true
+	}
 	resp := e.acquireResponse()
 	sampleLatency := false
 	if *sampleCountdown <= 1 {
@@ -193,7 +245,7 @@ func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCo
 	if sampleLatency {
 		startedAt = time.Now()
 	}
-	err := e.clients[step.clientIndex].DoTimeout(req, resp, e.cfg.requestTimeout)
+	err = e.clients[step.clientIndex].DoTimeout(req, resp, e.cfg.requestTimeout)
 	latency := time.Duration(0)
 	if sampleLatency {
 		latency = time.Since(startedAt)
@@ -201,6 +253,7 @@ func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCo
 
 	if err != nil {
 		*lastStatus = 0
+		invalidateCaptures(step.captures, variables)
 		stats.RecordFailureSampled(latency, step.requestBytes, sampleLatency, ClassifyFailure(err))
 	} else {
 		*lastStatus = resp.StatusCode()
@@ -210,8 +263,8 @@ func (e *Engine) runRequestStep(ctx context.Context, stats *statsShard, sampleCo
 			stats.RecordHTTPFailureSampled(latency, step.requestBytes, sampleLatency, FailureOther, *lastStatus)
 		}
 		if len(step.captures) > 0 {
-			if err := captureVariables(resp.Body(), step.captures, variables); err != nil {
-				stats.RecordAssertionFailure()
+			if err := captureVariables(resp.Body(), *lastStatus, step.captures, variables); err != nil {
+				stats.RecordCaptureFailure()
 			}
 		}
 	}
@@ -271,11 +324,16 @@ func (e *Engine) waitForRampUp(ctx context.Context, index int) bool {
 	}
 }
 
-func (e *Engine) acquireRequest(step compiledRequestStep, variables map[string]string) *fasthttp.Request {
+func (e *Engine) acquireRequest(step compiledRequestStep, variables *workerVariables) (*fasthttp.Request, error) {
 	req := e.reqPool.Get().(*fasthttp.Request)
 	req.Reset()
 	if step.requestURITemplated {
-		req.SetRequestURIBytes(applyTemplateBytes(step.requestURI, variables))
+		rendered, err := applyTemplateBytes(step.requestURI, variables)
+		if err != nil {
+			e.releaseRequest(req)
+			return nil, fmt.Errorf("request URL: %w", err)
+		}
+		req.SetRequestURIBytes(rendered)
 	} else {
 		req.SetRequestURIBytes(step.requestURI)
 	}
@@ -283,65 +341,153 @@ func (e *Engine) acquireRequest(step compiledRequestStep, variables map[string]s
 	req.Header.SetMethodBytes(step.method)
 	for i := range step.headers {
 		if step.headers[i].templated {
-			req.Header.SetBytesKV(step.headers[i].name, applyTemplateBytes(step.headers[i].value, variables))
+			rendered, err := applyTemplateBytes(step.headers[i].value, variables)
+			if err != nil {
+				e.releaseRequest(req)
+				return nil, fmt.Errorf("header %q: %w", step.headers[i].name, err)
+			}
+			req.Header.SetBytesKV(step.headers[i].name, rendered)
 		} else {
 			req.Header.SetBytesKV(step.headers[i].name, step.headers[i].value)
 		}
 	}
 	if len(step.body) > 0 {
 		if step.bodyTemplated {
-			req.SetBodyRaw(applyTemplateBytes(step.body, variables))
+			rendered, err := applyTemplateBytes(step.body, variables)
+			if err != nil {
+				e.releaseRequest(req)
+				return nil, fmt.Errorf("request body: %w", err)
+			}
+			req.SetBodyRaw(rendered)
 		} else {
 			req.SetBodyRaw(step.body)
 		}
 	}
-	return req
+	return req, nil
 }
 
-func applyTemplateBytes(value []byte, variables map[string]string) []byte {
-	rendered := string(value)
-	for name, variableValue := range variables {
-		rendered = strings.ReplaceAll(rendered, "{{"+name+"}}", variableValue)
+func applyTemplateBytes(value []byte, variables *workerVariables) ([]byte, error) {
+	raw := string(value)
+	var rendered strings.Builder
+	rendered.Grow(len(raw))
+	for offset := 0; offset < len(raw); {
+		startOffset := strings.Index(raw[offset:], "{{")
+		if startOffset < 0 {
+			rendered.WriteString(raw[offset:])
+			break
+		}
+		start := offset + startOffset
+		rendered.WriteString(raw[offset:start])
+		endOffset := strings.Index(raw[start+2:], "}}")
+		if endOffset < 0 {
+			return nil, errors.New("template is not closed")
+		}
+		end := start + 2 + endOffset
+		name := strings.TrimSpace(raw[start+2 : end])
+		variableValue, ok := variables.value(name)
+		if !ok {
+			return nil, fmt.Errorf("template variable %q is unavailable for this iteration", name)
+		}
+		rendered.WriteString(variableValue)
+		offset = end + 2
 	}
-	return []byte(rendered)
+	return []byte(rendered.String()), nil
 }
 
-func captureVariables(body []byte, captures []compiledVariableCapture, variables map[string]string) error {
+func captureVariables(body []byte, status int, captures []compiledVariableCapture, variables *workerVariables) error {
+	eligible := make([]compiledVariableCapture, 0, len(captures))
+	for _, capture := range captures {
+		if capture.scope == VariableScopeRun && variables.runValueExists(capture.name) {
+			continue
+		}
+		if !captureStatusMatches(status, capture.onStatus) {
+			variables.invalidate(capture)
+			continue
+		}
+		eligible = append(eligible, capture)
+	}
+	if len(eligible) == 0 {
+		return nil
+	}
+
 	var document any
 	if err := json.Unmarshal(body, &document); err != nil {
-		return err
+		invalidateCaptures(eligible, variables)
+		return fmt.Errorf("capture response is invalid JSON: %w", err)
 	}
-	for _, capture := range captures {
-		value, ok := jsonPathValue(document, capture.path)
-		if !ok {
-			return fmt.Errorf("capture path not found: %s", strings.Join(capture.path, "."))
+	values := make([]string, len(eligible))
+	for index, capture := range eligible {
+		value, err := jsonPathValue(document, capture.path)
+		if err != nil {
+			invalidateCaptures(eligible, variables)
+			return fmt.Errorf("capture %q path %q: %w", capture.name, formatJSONPath(capture.path), err)
 		}
-		variables[capture.name] = stringifyCaptureValue(value)
+		values[index] = stringifyCaptureValue(value)
+	}
+	for index, capture := range eligible {
+		variables.set(capture, values[index])
 	}
 	return nil
 }
 
-func jsonPathValue(value any, path []string) (any, bool) {
+func invalidateCaptures(captures []compiledVariableCapture, variables *workerVariables) {
+	for _, capture := range captures {
+		variables.invalidate(capture)
+	}
+}
+
+func captureStatusMatches(status int, policy string) bool {
+	switch policy {
+	case CaptureStatusAny:
+		return true
+	case CaptureStatusSuccess:
+		return isSuccessStatus(status)
+	default:
+		return matchStatus(status, policy)
+	}
+}
+
+func jsonPathValue(value any, path []string) (any, error) {
 	current := value
-	for _, segment := range path {
+	for index, segment := range path {
 		switch typed := current.(type) {
 		case map[string]any:
 			next, ok := typed[segment]
 			if !ok {
-				return nil, false
+				return nil, fmt.Errorf("segment %q was not found after %q", segment, formatJSONPath(path[:index]))
 			}
 			current = next
 		case []any:
-			index, err := strconv.Atoi(segment)
-			if err != nil || index < 0 || index >= len(typed) {
-				return nil, false
+			arrayIndex, err := strconv.Atoi(segment)
+			if err != nil {
+				return nil, fmt.Errorf("segment %q must be an array index after %q", segment, formatJSONPath(path[:index]))
 			}
-			current = typed[index]
+			if arrayIndex < 0 || arrayIndex >= len(typed) {
+				return nil, fmt.Errorf(
+					"array index %d is out of range after %q (length %d)",
+					arrayIndex,
+					formatJSONPath(path[:index]),
+					len(typed),
+				)
+			}
+			current = typed[arrayIndex]
 		default:
-			return nil, false
+			return nil, fmt.Errorf(
+				"cannot traverse segment %q after %q because the current value is %T",
+				segment,
+				formatJSONPath(path[:index]),
+				current,
+			)
 		}
 	}
-	return current, true
+	return current, nil
+}
+
+func formatJSONPath(path []string) string {
+	if len(path) == 0 {
+		return "$"
+	}
+	return strings.Join(path, ".")
 }
 
 func stringifyCaptureValue(value any) string {

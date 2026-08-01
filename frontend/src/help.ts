@@ -22,6 +22,7 @@ export const nodeHelpItems: Record<FlowNodeKind, HelpItem[]> = {
     helpItem("Auth", "Adds Bearer token, Cookie, or API key headers at run time. Secret values are kept in memory only.", "실행 시 Bearer token, Cookie, API key header를 자동으로 추가합니다. Secret 값은 메모리에만 보관됩니다."),
     helpItem("Headers", "Use Direct mode for raw Name: Value lines, or Form mode to add common headers one by one.", "Direct 모드는 Name: Value를 직접 입력합니다. Form 모드는 자주 쓰는 header를 한 줄씩 추가해서 입력합니다."),
     helpItem("Body", "Request payload sent with methods such as POST, PUT, or PATCH.", "POST, PUT, PATCH 같은 method에서 함께 보낼 request payload입니다."),
+    helpItem("Capture JSON", "Use name[@iteration|run][:success|any|2xx|200]=JSON.path. Iteration values reset each loop; run values keep the first successful value per virtual user. Missing templates are never sent.", "name[@iteration|run][:success|any|2xx|200]=JSON.path 형식입니다. iteration 값은 loop마다 초기화되고 run 값은 virtual user별 첫 성공값을 유지합니다. 누락된 template은 전송하지 않습니다."),
   ],
   engine: [
     helpItem("VUs", "Number of virtual users running the scenario loop concurrently.", "Scenario loop를 동시에 실행하는 virtual users 수입니다."),

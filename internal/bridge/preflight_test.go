@@ -496,6 +496,42 @@ func TestPreflightRejectsConfiguredBounds(t *testing.T) {
 	}
 }
 
+func TestPreflightNormalizesCapturePolicyAndValidatesTemplates(t *testing.T) {
+	request := validPreflightRequest()
+	request.Config.ScenarioSteps = []ScenarioStep{
+		{
+			Kind: "request",
+			URL:  request.Config.URL + "/login",
+			Captures: []Capture{{
+				Name: "token",
+				Path: "data.items[0].token",
+			}},
+		},
+		{
+			Kind: "request",
+			URL:  request.Config.URL + "/secure/{{token}}",
+		},
+	}
+
+	preflight, err := preflightStartRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := preflight.normalizedConfig.ScenarioSteps[0].Captures[0]
+	if capture.Scope != "iteration" || capture.OnStatus != "success" {
+		t.Fatalf("expected explicit capture defaults, got %+v", capture)
+	}
+
+	request.Config.ScenarioSteps = []ScenarioStep{{
+		Kind: "request",
+		URL:  request.Config.URL + "/secure/{{missing}}",
+	}}
+	_, err = preflightStartRequest(request)
+	if err == nil || !strings.Contains(err.Error(), `template variable "missing" is not defined`) {
+		t.Fatalf("expected unknown-template preflight error, got %v", err)
+	}
+}
+
 func TestControllerStartReturnsEffectiveConfiguration(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)

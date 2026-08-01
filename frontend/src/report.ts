@@ -2,7 +2,7 @@ import type { Header, MetricsBatch, QualityGate, ScenarioStep, StartRequest, Sta
 import { redactHeaders, redactSensitiveURL } from "./secretSanitization";
 
 export type RunReport = {
-  schemaVersion: 3;
+  schemaVersion: 4;
   generatedAtUnixMs: number;
   run: {
     targetUrl: string;
@@ -43,7 +43,7 @@ type ReportScenarioStep = {
   method?: string;
   headers?: Header[];
   bodyBytes?: number;
-  captures?: Array<{ name: string; path: string }>;
+  captures?: Array<{ name: string; path: string; scope: string; onStatus: string }>;
   delayMs?: number;
   expectedStatus?: string;
 };
@@ -71,6 +71,8 @@ type ReportSummary = {
     connRefused: number;
     other: number;
     assertions: number;
+    captures: number;
+    templates: number;
   };
   bytes: {
     read: number;
@@ -145,7 +147,7 @@ export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): 
   const averageRps = elapsedMs > 0 ? total / (elapsedMs / 1_000) : 0;
 
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     generatedAtUnixMs: Date.now(),
     run: {
       targetUrl: redactSensitiveURL(request.config.url),
@@ -195,6 +197,8 @@ export function buildRunReport(request: StartRequest, batches: MetricsBatch[]): 
         connRefused: finalBatch.connRefused,
         other: finalBatch.otherErrors,
         assertions: finalBatch.assertionsFailed,
+        captures: finalBatch.captureFailures,
+        templates: finalBatch.templateFailures,
       },
       bytes: {
         read: finalBatch.bytesRead,
@@ -486,6 +490,8 @@ function redactScenarioStep(step: ScenarioStep): ReportScenarioStep {
       captures: (step.captures ?? []).map((capture) => ({
         name: capture.name,
         path: capture.path,
+        scope: capture.scope ?? "iteration",
+        onStatus: capture.onStatus ?? "success",
       })),
     };
   }
@@ -529,6 +535,8 @@ function emptyBatch(): MetricsBatch {
     connRefused: 0,
     otherErrors: 0,
     assertionsFailed: 0,
+    captureFailures: 0,
+    templateFailures: 0,
     intervalLatency: {
       samples: 0,
       avgMs: 0,

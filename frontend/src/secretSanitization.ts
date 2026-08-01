@@ -223,7 +223,7 @@ function transformSensitiveURL(rawURL: string, replacement: (name: string) => st
       }
     }
     url.hash = transformURLFragment(url.hash, replacement);
-    return restoreEncodedPlaceholders(url.toString());
+    return restoreEncodedTemplates(url.toString());
   } catch {
     return transformRelativeURL(rawURL, replacement);
   }
@@ -344,10 +344,10 @@ function sanitizeNamedAssignments(raw: string) {
   );
 }
 
-function restoreEncodedPlaceholders(value: string) {
+function restoreEncodedTemplates(value: string) {
   return value.replace(
-    /%7B%7B(SECRET_[A-Z0-9_]+)%7D%7D/gi,
-    (_match, name: string) => `{{${name.toUpperCase()}}}`,
+    /%7B%7B([A-Z_][A-Z0-9_.-]*)%7D%7D/gi,
+    (_match, name: string) => `{{${name}}}`,
   );
 }
 

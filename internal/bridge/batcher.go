@@ -36,6 +36,8 @@ type MetricsBatch struct {
 	ConnRefused      uint64                   `json:"connRefused"`
 	OtherErrors      uint64                   `json:"otherErrors"`
 	AssertionsFailed uint64                   `json:"assertionsFailed"`
+	CaptureFailures  uint64                   `json:"captureFailures"`
+	TemplateFailures uint64                   `json:"templateFailures"`
 	IntervalLatency  IntervalLatencyMetrics   `json:"intervalLatency"`
 	RunLatency       CumulativeLatencyMetrics `json:"runLatency"`
 	BytesRead        uint64                   `json:"bytesRead"`
@@ -182,6 +184,8 @@ func buildMetricsBatch(previous engine.Snapshot, current engine.Snapshot, runnin
 		ConnRefused:      current.ConnRefused,
 		OtherErrors:      current.OtherFailures,
 		AssertionsFailed: current.AssertionFailures,
+		CaptureFailures:  current.CaptureFailures,
+		TemplateFailures: current.TemplateFailures,
 		IntervalLatency:  intervalLatencyMetrics(latencyDelta, latencySampleDelta, latencyBucketDelta),
 		RunLatency:       cumulativeLatencyMetrics(current),
 		BytesRead:        current.BytesRead,

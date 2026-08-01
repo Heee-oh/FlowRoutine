@@ -67,21 +67,24 @@ func TestBuildMetricsBatchUsesSnapshotDelta(t *testing.T) {
 	batch := buildMetricsBatch(
 		engine.Snapshot{At: previousAt, TotalRequests: 10, LatencySamples: 10, TotalLatencyNano: uint64(10 * time.Millisecond)},
 		engine.Snapshot{
-			At:               currentAt,
-			TotalRequests:    30,
-			SuccessRequests:  25,
-			FailedRequests:   5,
-			TimeoutFailures:  1,
-			DNSFailures:      2,
-			TLSFailures:      1,
-			ConnRefused:      1,
-			LatencySamples:   30,
-			TotalLatencyNano: uint64(50 * time.Millisecond),
-			MinLatencyNano:   uint64(time.Millisecond),
-			MaxLatencyNano:   uint64(5 * time.Millisecond),
-			BytesRead:        200,
-			BytesWritten:     300,
-			StatusCodes:      statusCodesSnapshot(map[int]uint64{401: 2, 200: 20, 500: 3}),
+			At:                currentAt,
+			TotalRequests:     30,
+			SuccessRequests:   25,
+			FailedRequests:    5,
+			TimeoutFailures:   1,
+			DNSFailures:       2,
+			TLSFailures:       1,
+			ConnRefused:       1,
+			AssertionFailures: 7,
+			CaptureFailures:   2,
+			TemplateFailures:  3,
+			LatencySamples:    30,
+			TotalLatencyNano:  uint64(50 * time.Millisecond),
+			MinLatencyNano:    uint64(time.Millisecond),
+			MaxLatencyNano:    uint64(5 * time.Millisecond),
+			BytesRead:         200,
+			BytesWritten:      300,
+			StatusCodes:       statusCodesSnapshot(map[int]uint64{401: 2, 200: 20, 500: 3}),
 		},
 		true,
 		currentAt,
@@ -101,6 +104,9 @@ func TestBuildMetricsBatchUsesSnapshotDelta(t *testing.T) {
 	}
 	if batch.Timeout != 1 || batch.DNS != 2 || batch.TLS != 1 || batch.ConnRefused != 1 {
 		t.Fatalf("unexpected failure breakdown: %+v", batch)
+	}
+	if batch.AssertionsFailed != 7 || batch.CaptureFailures != 2 || batch.TemplateFailures != 3 {
+		t.Fatalf("unexpected assertion breakdown: %+v", batch)
 	}
 	if len(batch.StatusCodes) != 3 ||
 		batch.StatusCodes[0] != (StatusCodeCount{Code: 200, Count: 20}) ||

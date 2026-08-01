@@ -224,11 +224,16 @@ const NodeFields = memo(function NodeFields({
               rows={3}
               value={node.data.capturesText ?? ""}
               spellCheck={false}
-              placeholder="token=data.accessToken"
+              placeholder="token@iteration:success=data.accessToken"
               onChange={(event) => updateNode({ capturesText: event.target.value })}
             />
             <div className="inspector-note">
-              Captured values can be reused as {"{{token}}"} in later URLs, headers, or bodies.
+              Use name[@iteration|run][:success|any|2xx|200]=JSON.path. Iteration values reset every loop;
+              run values keep the first successful value per virtual user.
+            </div>
+            <div className="inspector-note">
+              Reuse values as {"{{token}}"} in later URLs, headers, or bodies. Missing values skip the request
+              and count as template assertions.
             </div>
           </Field>
         </>
