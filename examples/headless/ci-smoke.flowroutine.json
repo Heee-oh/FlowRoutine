@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "scenario": {
+    "id": "ci-smoke",
+    "name": "Headless CI smoke",
+    "revision": 1,
+    "config": {
+      "url": "http://127.0.0.1:18080/",
+      "method": "GET",
+      "headers": [],
+      "body": "",
+      "virtualUsers": 1,
+      "durationMs": 300,
+      "requestTimeoutMs": 1000,
+      "maxConnsPerHost": 4,
+      "readBufferSize": 4096,
+      "writeBufferSize": 4096,
+      "maxResponseBytes": 1048576,
+      "latencySampleRate": 1,
+      "rateLimitRps": 20,
+      "rampUpMs": 0,
+      "scenarioSteps": []
+    },
+    "batchIntervalMs": 100,
+    "qualityGate": {
+      "maxFailureRatePct": 1,
+      "maxP95LatencyMs": 0,
+      "maxP99LatencyMs": 0,
+      "minRps": 0
+    },
+    "requiredRuntimeBindings": []
+  }
+}

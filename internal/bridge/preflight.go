@@ -89,7 +89,7 @@ type PreflightWarning struct {
 }
 
 func preflightStartRequest(request StartRequest) (PreflightResponse, error) {
-	config, err := normalizeLoadConfig(request.Config)
+	config, err := normalizeLoadConfigWithRuntime(request.Config, request.RuntimeBindings)
 	if err != nil {
 		return PreflightResponse{}, err
 	}
@@ -157,6 +157,10 @@ func effectiveLoadConfig(config LoadConfig) EffectiveLoadConfig {
 }
 
 func normalizeLoadConfig(config LoadConfig) (LoadConfig, error) {
+	return normalizeLoadConfigWithRuntime(config, nil)
+}
+
+func normalizeLoadConfigWithRuntime(config LoadConfig, runtimeBindings map[string]string) (LoadConfig, error) {
 	next := config
 	next.URL = strings.TrimSpace(config.URL)
 	if _, err := validateHTTPURL("url", next.URL); err != nil {
@@ -270,7 +274,7 @@ func normalizeLoadConfig(config LoadConfig) (LoadConfig, error) {
 	if err != nil {
 		return LoadConfig{}, err
 	}
-	if err := engine.ValidateConfig(next.toEngineConfig()); err != nil {
+	if err := engine.ValidateConfig(next.toEngineConfigWithRuntime(runtimeBindings)); err != nil {
 		return LoadConfig{}, fmt.Errorf("scenario configuration: %w", err)
 	}
 	return next, nil

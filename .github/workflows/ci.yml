@@ -56,5 +56,25 @@ jobs:
       - name: Run Go tests with race detector
         run: go test -race -count=1 ./...
 
+      - name: Run headless scenario smoke test
+        run: |
+          python3 -m http.server 18080 --bind 127.0.0.1 >"$RUNNER_TEMP/flowroutine-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for attempt in {1..50}; do
+            if curl --fail --silent http://127.0.0.1:18080/ >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 50 ]; then
+              cat "$RUNNER_TEMP/flowroutine-server.log"
+              exit 1
+            fi
+            sleep 0.1
+          done
+          go run ./cmd/flowroutine-run \
+            -json-report "$RUNNER_TEMP/flowroutine-report.json" \
+            -junit-report "$RUNNER_TEMP/flowroutine-junit.xml" \
+            examples/headless/ci-smoke.flowroutine.json
+
       - name: Build Go packages
         run: go build ./...

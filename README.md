@@ -27,6 +27,7 @@ Built with OpenAI Codex assistance.
 - **Versioned scenario library**: Name and tag scenarios, recover autosaved drafts, migrate older saves, undo destructive graph changes, and exchange sanitized JSON files.
 - **Local load engine**: Run staged virtual-user or arrival-rate profiles locally with goroutines, `fasthttp`, keep-alive reuse, and pooled request/response objects.
 - **Native distributed workers**: Coordinate mTLS-authenticated workers with synchronized starts, total-preserving load shards, and exact histogram aggregation.
+- **Headless CI runner**: Execute versioned scenarios with the native engine, JSON/JUnit reports, secret bindings, and stable SLO exit codes.
 - **Realtime feedback**: Track RPS, latency, failures, status code counts, and bounded live chart data through batched Wails events.
 - **Shareable local reports**: Export completed runs as redacted JSON reports with summary metrics, error breakdowns, status codes, and timeline points.
 - **SLO gates**: Configure failure-rate, latency, and RPS thresholds on the Metrics node and get pass/fail results locally or in exported k6 scripts.
@@ -62,7 +63,7 @@ go build ./...
 | Engine | Constant/ramping VUs, constant/ramping arrival rate, graceful stop, RPS cap, timeouts, max connections, keep-alive reuse |
 | Metrics | RPS, aggregate and request-step counts, latency percentiles, transport failures, typed assertion failures, dropped iterations, and HTTP status diagnostics |
 | Reports | Completed-run JSON export with per-step diagnostics, SLO pass/fail, local baseline comparison, and sensitive-data redaction |
-| Interop | k6 JavaScript export with thresholds and sensitive headers mapped to environment variables |
+| Interop | Native headless CI runner plus k6 JavaScript export with thresholds and environment-bound secrets |
 | Releases | macOS notarization, Windows Authenticode, Sigstore bundles, checksums, SPDX SBOMs, and build provenance |
 | UI | Node help, Korean/English descriptions, adjustable chart window, wheel zoom, edge deletion |
 
@@ -187,6 +188,21 @@ go run ./cmd/flowroutine-bench -url https://example.com -duration 5s -warmup 1s 
 ```
 
 Benchmark results vary by hardware, OS limits, network path, TLS cost, and target capacity. Treat local results as measurements of that environment, not universal project guarantees.
+
+## Headless CI Runner
+
+Run a compiled, versioned scenario with the same preflight, engine, metrics, and SLO semantics as the desktop app:
+
+```bash
+go run ./cmd/flowroutine-run \
+  -json-report report.json \
+  -junit-report junit.xml \
+  examples/headless/ci-smoke.flowroutine.json
+```
+
+Validation, execution, and SLO failures exit with codes `2`, `3`, and `4`. Runtime secrets are accepted only by
+explicit environment-variable or file bindings and are excluded from reports. See the
+[headless runner guide](docs/headless-runner.md) for the schema, binding syntax, and CI behavior.
 
 ## Distributed Workers
 
